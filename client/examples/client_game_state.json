@@ -1,0 +1,18 @@
+{
+    "serverState": {
+        "players": [
+            {"id": "axlkjalkdgga", "name": "Alice", "is_host": true},
+            {"id": "bxlkjalkdggb", "name": "Bob", "is_host": false},
+            {"id": "cxlkjalkdggc", "name": "Charlie", "is_host": false},
+            {"id": "dxlkjalkdggd", "name": "Diana", "is_host": false}
+        ],
+        "hostId": "axlkjalkdgga",
+        "gamePhase": "in-lobby"
+    },
+    "clientState": {
+        "playerName": "Alice",
+        "playerIsHost": true,
+        "clientGamePhase": "in-lobby",
+        "roomCode": "XBR4"
+    }
+}
