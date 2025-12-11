@@ -51,6 +51,60 @@ function registerRoomHandlers(io, socket, rooms) {
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
     });
 
+    // Host submits game configuration
+    socket.on("submit-game-config", (roomCode, config, callback) => {
+
+        console.log(`Received game configuration for room ${roomCode}:\n`, config);
+
+        rooms[roomCode].gameConfig = config;
+        rooms[roomCode].playerLookup = {};
+        rooms[roomCode].teamLookup = {};
+        rooms[roomCode].gamePhase = "unknown";
+
+        // Loop through players key in config
+        for (let i = 0; i < config.teams.length; i++) {
+            let teamName = config.teams[i].name;
+            let playersArray = config.teams[i].players;
+            for (let j = 0; j < playersArray.length; j++) {
+
+                let player_id = null;
+                let is_host = false;
+                // Find player in current state object 
+                for (let k = 0; k < rooms[roomCode].players.length; k++) {
+                    if (rooms[roomCode].players[k].name === playersArray[j]) {
+                        // Assign player id and is_host status
+                        player_id = rooms[roomCode].players[k].id;
+                        is_host = rooms[roomCode].players[k].is_host;
+                        break;
+                    }
+                }
+
+                rooms[roomCode].playerLookup[playersArray[j]] = {
+                    "id": player_id, 
+                    "is_host": is_host,
+                    "team": teamName
+                };
+
+                // check if teamName is already in teamLookup
+                if (!rooms[roomCode].teamLookup[teamName]) {
+                    rooms[roomCode].teamLookup[teamName] = {
+                        "members": [],
+                        "score": 0
+                    };
+                }
+                rooms[roomCode].teamLookup[teamName][playersArray[j]] = {
+                    "id": player_id,
+                    "is_host": is_host
+                };
+                rooms[roomCode].teamLookup[teamName]["members"].push(playersArray[j]);
+            }
+        }
+
+        io.to(roomCode).emit("game-started", rooms[roomCode]);
+        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+    });
+
+
 }
 
 module.exports = { registerRoomHandlers };

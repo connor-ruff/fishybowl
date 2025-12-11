@@ -48,7 +48,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
     });
   }, [socket, gameState.clientState.playerName, setGameState, setError]);
 
-    const handleStartGame = useCallback(() => {
+  const handleStartGame = useCallback(() => {
 
         if (!gameState.clientState.playerIsHost) return alert("Only the host can start the game");
 
@@ -74,5 +74,32 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
 
     }, [socket, gameState.clientState.roomCode, setGameState, setError]);
 
-  return { handleCreateRoom, handleJoinRoom, handleStartGame };
+    const handleSubmitGameConfig = useCallback((config) => {
+
+        if (!gameState.clientState.playerIsHost) { 
+          return alert("Only the host can submit game configuration");
+        }
+    
+        
+        socket.emit("submit-game-config", gameState.clientState.roomCode, config, (res) => {
+            if (res.success) {
+                setGameState(prev => ({
+                    ...prev,
+                    serverState: res.gameState,
+                    clientState: {
+                        ...prev.clientState,
+                        clientGamePhase: "unknown-state" // Update as needed
+                    }
+                }));
+                setError("");
+            } else {
+                setError(res.error);
+                alert("Failed to submit configuration: " + res.error);
+            }
+        });
+
+    }, [socket, gameState, setGameState, setError]);
+
+
+  return { handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig };
 }

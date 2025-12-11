@@ -27,10 +27,8 @@ function App() {
     });
 
     socket.on("game-started", (serverState) => {
-      // TODO: Handle game started event
       console.log("Game started! Room data:", serverState);
-      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "pre-game-configs" } }));
-      // You'll probably want to update gameState here
+      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "unknown-state" } }));
     });
 
     return () => {
@@ -39,7 +37,9 @@ function App() {
     };
   }, []);
 
-  const { handleCreateRoom, handleJoinRoom, handleStartGame } = useGameHandlers(socket, gameState, setGameState, setError);
+  const { handleCreateRoom, handleJoinRoom, handleStartGame,
+    handleSubmitGameConfig
+   } = useGameHandlers(socket, gameState, setGameState, setError);
   
 
 
@@ -77,6 +77,7 @@ function App() {
         setGameState={setGameState}
         error={error}
         setError={setError}
+        handleSubmitGameConfig={handleSubmitGameConfig}
       />
     );
   }

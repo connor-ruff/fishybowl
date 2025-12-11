@@ -6,5 +6,48 @@
     {"id": "dxlkjalkdggd", "name": "Diana", "is_host": false}
  ],
  "hostId": "axlkjalkdgga",
- "gamePhase": "in-lobby"
+ "gamePhase": "in-lobby",
+
+ "gameConfig": {
+      "numTeams": 2,
+      "teams": [
+         {"name": "Team 1", "players": ["Alice", "Charlie"]},
+         {"name": "Team 2", "players": ["Bob", "Diana"]}
+      ],
+      "wordsPerPlayer": 5
+ },
+
+ "playerLookup": {
+      "Alice": {
+            "id": "axlkjalkdgga",
+            "is_host": true,
+            "team": "Team 1"
+      },
+      "Bob": {
+            "id": "bxlkjalkdggb",
+            "is_host": false,
+            "team": "Team 2"
+      },
+      "Charlie": {
+            "id": "cxlkjalkdggc",
+            "is_host": false,
+            "team": "Team 1"
+      },
+      "Diana": {
+            "id": "dxlkjalkdggd",
+            "is_host": false,
+            "team": "Team 2"   
+      }
+ },
+
+ "teamLookup": {
+      "Team 1": {
+            "members": ["Alice", "Charlie"],
+            "score": 0
+      },
+      "Team 2": {
+            "members": ["Bob", "Diana"],
+            "score": 0
+      }
+ }
 }

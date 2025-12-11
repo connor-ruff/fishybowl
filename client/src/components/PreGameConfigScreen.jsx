@@ -1,7 +1,8 @@
 import { useState } from 'react';
 
 function PreGameConfigsScreen({
-     gameState, setGameState, error, setError 
+     gameState, setGameState, error, setError,
+     handleSubmitGameConfig
 }) {
   
   // Local temporary state for configuration
@@ -42,7 +43,7 @@ function PreGameConfigsScreen({
     setTempConfig(prev => ({ ...prev, teams: newTeams }));
   };
 
-  const handleSubmitConfig = () => {
+  const handleSubmitConfig_component = () => {
     console.log("Submitting configuration:\n", tempConfig);
     
     // Check if all players are assigned to teams
@@ -53,9 +54,8 @@ function PreGameConfigsScreen({
       return alert("Please assign all players to teams");
     }
     
-    // Send temporary config to server
-    console.log("Submitting config to server:", tempConfig);
-    // TODO: socket.emit("submit-game-config", tempConfig, callback);
+    handleSubmitGameConfig(tempConfig);
+
     alert("Configuration submitted! (Server integration needed)");
   };
 
@@ -170,7 +170,7 @@ function PreGameConfigsScreen({
       {/* Start Game Button */}
       <div style={{ marginTop: '30px' }}>
         <button 
-          onClick={handleSubmitConfig}
+          onClick={handleSubmitConfig_component}
           style={{ 
             padding: '15px 30px', 
             backgroundColor: '#28a745', 
