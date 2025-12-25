@@ -14,29 +14,35 @@
          {"name": "Team 1", "players": ["Alice", "Charlie"]},
          {"name": "Team 2", "players": ["Bob", "Diana"]}
       ],
-      "wordsPerPlayer": 5
+      "numPlayers": 4,
+      "wordsPerPlayer": 5,
+      "numPlayersWithSubmittedWords": 0
  },
 
  "playerLookup": {
       "Alice": {
             "id": "axlkjalkdgga",
             "is_host": true,
-            "team": "Team 1"
+            "team": "Team 1",
+            "wordsSubmitted": false
       },
       "Bob": {
             "id": "bxlkjalkdggb",
             "is_host": false,
-            "team": "Team 2"
+            "team": "Team 2",
+            "wordsSubmitted": false
       },
       "Charlie": {
             "id": "cxlkjalkdggc",
             "is_host": false,
-            "team": "Team 1"
+            "team": "Team 1",
+            "wordsSubmitted": false
       },
       "Diana": {
             "id": "dxlkjalkdggd",
             "is_host": false,
-            "team": "Team 2"   
+            "team": "Team 2",
+            "wordsSubmitted": false
       }
  },
 
@@ -49,5 +55,18 @@
             "members": ["Bob", "Diana"],
             "score": 0
       }
+ },
+
+ "wordList" : {
+      "numberOfWords": 9,
+      "0": "Julius Caesar",
+      "1": "Cleopatra",
+      "2": "Rocky Balboa",
+      "3": "Amelia Earhart",
+      "4": "Zendaya",
+      "5": "Frosted Flakes",
+      "6": "Mount Everest",
+      "7": "Microsoft",
+      "8": "The Defrenestration of Prague"
  }
 }

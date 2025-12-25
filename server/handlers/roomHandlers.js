@@ -59,14 +59,18 @@ function registerRoomHandlers(io, socket, rooms) {
         rooms[roomCode].gameConfig = config;
         rooms[roomCode].playerLookup = {};
         rooms[roomCode].teamLookup = {};
-        rooms[roomCode].gamePhase = "unknown";
+        rooms[roomCode].gamePhase = "collecting-words";
+        rooms[roomCode].wordList = { "numberOfWords": 0 }; // Initialize empty word list
 
         // Loop through players key in config
+        let totalPlayers = 0;
         for (let i = 0; i < config.teams.length; i++) {
             let teamName = config.teams[i].name;
             let playersArray = config.teams[i].players;
+
             for (let j = 0; j < playersArray.length; j++) {
 
+                totalPlayers += 1;
                 let player_id = null;
                 let is_host = false;
                 // Find player in current state object 
@@ -82,7 +86,8 @@ function registerRoomHandlers(io, socket, rooms) {
                 rooms[roomCode].playerLookup[playersArray[j]] = {
                     "id": player_id, 
                     "is_host": is_host,
-                    "team": teamName
+                    "team": teamName,
+                    "wordsSubmitted": false
                 };
 
                 // check if teamName is already in teamLookup
@@ -92,16 +97,57 @@ function registerRoomHandlers(io, socket, rooms) {
                         "score": 0
                     };
                 }
-                rooms[roomCode].teamLookup[teamName][playersArray[j]] = {
-                    "id": player_id,
-                    "is_host": is_host
-                };
                 rooms[roomCode].teamLookup[teamName]["members"].push(playersArray[j]);
             }
         }
 
+        rooms[roomCode].gameConfig.numPlayers = totalPlayers;
+        rooms[roomCode].gameConfig.numPlayersWithSubmittedWords = 0;
+
+
         io.to(roomCode).emit("game-started", rooms[roomCode]);
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+    });
+
+    // Player submits their words 
+    socket.on("submit-words", (roomCode, playerName, words, callback) => {
+
+        console.log(`Received words from ${playerName} in room ${roomCode}:`, words);
+
+        // Add words to word list
+        let currentNumWords = rooms[roomCode].wordList ? rooms[roomCode].wordList.numberOfWords : 0;
+        for (let i = 0; i < words.length; i++) {
+            rooms[roomCode].wordList[currentNumWords + i] = words[i];
+        }
+        rooms[roomCode].wordList.numberOfWords = currentNumWords + words.length;
+
+        if (rooms[roomCode] && rooms[roomCode].playerLookup[playerName]) {
+            rooms[roomCode].playerLookup[playerName].submittedWords = words;
+            rooms[roomCode].playerLookup[playerName].wordsSubmitted = true;
+
+            // Update count of players who have submitted words
+            let count = 0;
+            for (const pname in rooms[roomCode].playerLookup) {
+                if (rooms[roomCode].playerLookup[pname].wordsSubmitted) {
+                    count += 1;
+                }
+            }
+            rooms[roomCode].gameConfig.numPlayersWithSubmittedWords = count;
+
+            console.log(`Updated playerLookup for room ${roomCode}:\n`, rooms[roomCode].playerLookup);
+        };
+        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+
+        // Check if all players have submitted words
+        if (rooms[roomCode].gameConfig.numPlayersWithSubmittedWords >= rooms[roomCode].gameConfig.numPlayers) {
+            console.log(`All players have submitted words in room ${roomCode}. Transitioning to next phase.`);
+
+            // Transition to next game phase (not implemented yet)
+            rooms[roomCode].gamePhase = "unknown";
+
+            // Notify all players in room about updated game state
+            io.to(roomCode).emit("all-words-submitted", rooms[roomCode]);
+        }
     });
 
 

@@ -88,7 +88,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
                     serverState: res.gameState,
                     clientState: {
                         ...prev.clientState,
-                        clientGamePhase: "unknown-state" // Update as needed
+                        clientGamePhase: "collecting-words" // Update as needed
                     }
                 }));
                 setError("");
@@ -100,6 +100,28 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
 
     }, [socket, gameState, setGameState, setError]);
 
+    const handleSubmitWords = useCallback((words) => {
 
-  return { handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig };
+      socket.emit("submit-words", gameState.clientState.roomCode, gameState.clientState.playerName, words, (res) => {
+          if (res.success) {
+              setGameState(prev => ({
+                  ...prev,
+                  serverState: res.gameState,
+                  clientState: {
+                      ...prev.clientState,
+                      clientGamePhase: "collecting-words-waiting-for-others" // Update as needed
+                  }
+              }));
+              setError("");
+          } else {
+              setError(res.error);
+              alert("Failed to submit words: " + res.error);
+          }
+        });
+
+      // TODO 
+    }, [socket, gameState, setGameState, setError]);
+
+
+  return { handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords };
 }

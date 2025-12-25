@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import StartScreen from "./components/StartScreen";
 import LobbyScreen from "./components/LobbyScreen";
 import PreGameConfigsScreen from "./components/PreGameConfigScreen";
+import CollectWordsScreen from "./components/CollectWordsScreen";
 import { useGameHandlers } from './hooks/useGameHandlers';
 
 const socket = io("http://localhost:3001");
@@ -28,17 +29,23 @@ function App() {
 
     socket.on("game-started", (serverState) => {
       console.log("Game started! Room data:", serverState);
-      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "unknown-state" } }));
+      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "collecting-words" } }));
+    });
+
+    socket.on("all-words-submitted", (serverState) => {
+      console.log("All words submitted! Room data:", serverState);
+      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "unknown" } }));
     });
 
     return () => {
       socket.off("update-players");
       socket.off("game-started");
+      socket.off("all-words-submitted");
     };
   }, []);
 
   const { handleCreateRoom, handleJoinRoom, handleStartGame,
-    handleSubmitGameConfig
+    handleSubmitGameConfig, handleSubmitWords
    } = useGameHandlers(socket, gameState, setGameState, setError);
   
 
@@ -82,11 +89,33 @@ function App() {
     );
   }
 
+  else if (gameState.serverState.gamePhase === "collecting-words" && gameState.clientState.clientGamePhase !== "collecting-words-waiting-for-others") {
+    return (
+      <CollectWordsScreen
+        gameState={gameState}
+        setGameState={setGameState}
+        error={error}
+        setError={setError}
+        handleSubmitWords={handleSubmitWords}
+      />
+    );
+  } 
+
+  else if (gameState.clientState.clientGamePhase === "collecting-words-waiting-for-others") {
+    return (
+      <div style={{ padding: 40 }}>
+        <h2>Waiting for Other Players...</h2>
+        <p>You have submitted your words/phrases. Please wait for other players to finish.</p>
+      </div>
+    );
+  }
+
   else {
     return (
       console.log("Unknown game state:\n", gameState) ||
       <div style={{ padding: 40 }}>
-        <h1>Unknown Game State</h1>
+        <h1>Unknown Game State:</h1>
+        <pre>{JSON.stringify(gameState, null, 2)}</pre>
       </div>
     );
   }
