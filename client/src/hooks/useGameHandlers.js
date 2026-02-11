@@ -26,21 +26,36 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
       return alert("Enter name and room code");
     }
     
-    socket.emit("join-room", { 
-      roomCode: roomCodeInput, 
-      playerName: gameState.clientState.playerName 
+    socket.emit("join-room", {
+      roomCode: roomCodeInput,
+      playerName: gameState.clientState.playerName
     }, (res) => {
       if (res.success) {
-        setGameState(prev => ({
-          ...prev,
-          serverState: res.gameState,
-          clientState: {
-            ...prev.clientState,
-            roomCode: res.roomCode,
-            playerIsHost: false,
-            clientGamePhase: "lobby"
-          }
-        }));
+        if (res.isRejoin) {
+          // Rejoin — restore full game state
+          setGameState(prev => ({
+            ...prev,
+            serverState: res.gameState,
+            clientState: {
+              ...prev.clientState,
+              roomCode: res.roomCode,
+              playerIsHost: res.isHost,
+              clientGamePhase: res.gameState.gamePhase
+            }
+          }));
+        } else {
+          // Normal join
+          setGameState(prev => ({
+            ...prev,
+            serverState: res.gameState,
+            clientState: {
+              ...prev.clientState,
+              roomCode: res.roomCode,
+              playerIsHost: false,
+              clientGamePhase: "lobby"
+            }
+          }));
+        }
         setError("");
       } else {
         setError(res.error);
@@ -109,7 +124,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
                   serverState: res.gameState,
                   clientState: {
                       ...prev.clientState,
-                      clientGamePhase: "collecting-words-waiting-for-others" // Update as needed
+                      clientGamePhase: "collecting-words-waiting-for-others"
                   }
               }));
               setError("");
@@ -118,10 +133,34 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
               alert("Failed to submit words: " + res.error);
           }
         });
-
-      // TODO 
     }, [socket, gameState, setGameState, setError]);
 
+    // Helper for gameplay actions that all follow the same pattern
+    const emitGameAction = useCallback((event) => {
+        socket.emit(event, gameState.clientState.roomCode, (res) => {
+            if (res.success) {
+                setGameState(prev => ({
+                    ...prev,
+                    serverState: res.gameState,
+                    clientState: { ...prev.clientState, clientGamePhase: res.gameState.gamePhase }
+                }));
+            } else {
+                setError(res.error);
+            }
+        });
+    }, [socket, gameState.clientState.roomCode, setGameState, setError]);
 
-  return { handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords };
+    const handleStartRound = useCallback(() => emitGameAction("start-round"), [emitGameAction]);
+    const handleStartTurn = useCallback(() => emitGameAction("start-turn"), [emitGameAction]);
+    const handleWordGuessed = useCallback(() => emitGameAction("word-guessed"), [emitGameAction]);
+    const handleSkipWord = useCallback(() => emitGameAction("skip-word"), [emitGameAction]);
+    const handleNextTurn = useCallback(() => emitGameAction("next-turn"), [emitGameAction]);
+    const handleNextRound = useCallback(() => emitGameAction("next-round"), [emitGameAction]);
+    const handlePlayAgain = useCallback(() => emitGameAction("play-again"), [emitGameAction]);
+
+  return {
+    handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords,
+    handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
+    handleNextTurn, handleNextRound, handlePlayAgain
+  };
 }

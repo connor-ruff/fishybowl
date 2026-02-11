@@ -55,8 +55,6 @@ function PreGameConfigsScreen({
     }
     
     handleSubmitGameConfig(tempConfig);
-
-    alert("Configuration submitted! (Server integration needed)");
   };
 
   // Only host can configure

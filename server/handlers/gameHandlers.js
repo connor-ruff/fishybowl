@@ -1,0 +1,179 @@
+const { shuffleArray, getWordArray, clearTurnTimer, startTurnTimer } = require('../utils/roomUtils');
+
+function getCurrentClueGiver(room) {
+    const game = room.activeGame;
+    const teamName = game.teamOrder[game.currentTeamIndex];
+    const members = room.teamLookup[teamName].members;
+    const idx = game.clueGiverRotation[teamName] % members.length;
+    return members[idx];
+}
+
+function broadcastState(io, roomCode, rooms) {
+    io.to(roomCode).emit("game-state-update", rooms[roomCode]);
+}
+
+function registerGameHandlers(io, socket, rooms) {
+
+    // Host clicks "Start Round" from round-start screen
+    socket.on("start-round", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        room.gamePhase = "turn-ready";
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Clue giver clicks "Start" on turn-ready screen
+    socket.on("start-turn", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+
+        if (game.wordsRemaining.length === 0) {
+            room.gamePhase = "round-end";
+            broadcastState(io, roomCode, rooms);
+            return callback({ success: true, gameState: room });
+        }
+
+        game.currentWord = game.wordsRemaining.pop();
+        game.wordsGuessedThisTurn = [];
+        game.turnTimeLeft = game.turnDuration;
+        room.gamePhase = "turn-active";
+
+        broadcastState(io, roomCode, rooms);
+        startTurnTimer(io, roomCode, rooms);
+
+        callback({ success: true, gameState: room });
+    });
+
+    // Clue giver presses "Got It!"
+    socket.on("word-guessed", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+        if (!game.currentWord) return callback({ success: false, error: "No active word" });
+
+        // Score the point
+        const teamName = game.teamOrder[game.currentTeamIndex];
+        const roundIdx = game.currentRound - 1;
+        game.scores[teamName][roundIdx] += 1;
+        room.teamLookup[teamName].score += 1;
+
+        game.wordsGuessedThisTurn.push(game.currentWord);
+
+        // Rotate clue giver to the next teammate
+        const teamName2 = game.teamOrder[game.currentTeamIndex];
+        game.clueGiverRotation[teamName2] += 1;
+        game.currentClueGiver = getCurrentClueGiver(room);
+
+        // Draw next word or end round
+        if (game.wordsRemaining.length === 0) {
+            clearTurnTimer(roomCode);
+            game.currentWord = null;
+            room.gamePhase = "round-end";
+            broadcastState(io, roomCode, rooms);
+            return callback({ success: true, gameState: room });
+        }
+
+        game.currentWord = game.wordsRemaining.pop();
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Clue giver presses "Skip"
+    socket.on("skip-word", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+        if (!game.currentWord) return callback({ success: false, error: "No active word" });
+
+        // Put current word back at a random position in the pool
+        const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
+        game.wordsRemaining.splice(insertIdx, 0, game.currentWord);
+
+        // Draw the next word (from the end, so it's different unless only 1 word)
+        game.currentWord = game.wordsRemaining.pop();
+
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Advance to next turn after turn-end
+    socket.on("next-turn", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+
+        // Rotate clue giver for the team that just played
+        const currentTeam = game.teamOrder[game.currentTeamIndex];
+        game.clueGiverRotation[currentTeam] += 1;
+
+        // Advance to next team
+        game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
+
+        // Set up next clue giver
+        game.currentClueGiver = getCurrentClueGiver(room);
+        game.currentWord = null;
+        game.wordsGuessedThisTurn = [];
+
+        room.gamePhase = "turn-ready";
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Start next round after round-end
+    socket.on("next-round", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+
+        if (game.currentRound >= 3) {
+            room.gamePhase = "game-over";
+            broadcastState(io, roomCode, rooms);
+            return callback({ success: true, gameState: room });
+        }
+
+        // Advance clue giver for the team that was playing when round ended
+        const lastTeam = game.teamOrder[game.currentTeamIndex];
+        game.clueGiverRotation[lastTeam] += 1;
+
+        game.currentRound += 1;
+        game.wordsRemaining = shuffleArray(getWordArray(room));
+
+        // Next team starts the new round
+        game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
+        game.currentClueGiver = getCurrentClueGiver(room);
+        game.currentWord = null;
+        game.wordsGuessedThisTurn = [];
+
+        room.gamePhase = "round-start";
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Play again — reset to lobby
+    socket.on("play-again", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        clearTurnTimer(roomCode);
+
+        delete room.activeGame;
+        delete room.gameConfig;
+        delete room.playerLookup;
+        delete room.teamLookup;
+        delete room.wordList;
+        room.gamePhase = "in-lobby";
+
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+}
+
+module.exports = { registerGameHandlers };

@@ -1,5 +1,4 @@
-// import generateRoomCode from utils
-const { generateRoomCode, getPlayerObjects } = require('../utils/roomUtils');
+const { generateRoomCode, getPlayerObjects, shuffleArray, getWordArray, startTurnTimer } = require('../utils/roomUtils');
 
 function registerRoomHandlers(io, socket, rooms) {
 
@@ -19,7 +18,7 @@ function registerRoomHandlers(io, socket, rooms) {
     });
 
 
-    // Player joins a room
+    // Player joins a room (or rejoins after disconnect)
     socket.on("join-room", (data, callback) => {
         const { roomCode, playerName } = data;
         const room = rooms[roomCode];
@@ -28,10 +27,45 @@ function registerRoomHandlers(io, socket, rooms) {
             return;
         }
 
-        room.players.push({ id: socket.id, name: playerName, is_host: false });
+        // Check for rejoin — a disconnected player with the same name
+        const disconnectedPlayer = room.players.find(p => p.name === playerName && p.connected === false);
+        if (disconnectedPlayer) {
+            // Rejoin: update socket ID, mark connected, join the Socket.IO room
+            disconnectedPlayer.id = socket.id;
+            disconnectedPlayer.connected = true;
+            socket.join(roomCode);
+            console.log(`${playerName} rejoined room ${roomCode}`);
+
+            // Check if all players are now connected
+            const allConnected = room.players.every(p => p.connected !== false);
+            if (allConnected && room.gamePhase === "paused") {
+                room.gamePhase = room.pausedGamePhase;
+                delete room.pausedGamePhase;
+                console.log(`Game resumed in room ${roomCode} (phase: ${room.gamePhase})`);
+
+                // Restart the turn timer if we were mid-turn
+                if (room.gamePhase === "turn-active") {
+                    startTurnTimer(io, roomCode, rooms);
+                }
+            }
+
+            io.to(roomCode).emit("game-state-update", room);
+            callback({
+                success: true, roomCode, gameState: room,
+                isRejoin: true, isHost: disconnectedPlayer.is_host
+            });
+            return;
+        }
+
+        // Normal join — only allowed during lobby
+        if (room.gamePhase !== "in-lobby") {
+            callback({ success: false, error: "Game already in progress" });
+            return;
+        }
+
+        room.players.push({ id: socket.id, name: playerName, is_host: false, connected: true });
         socket.join(roomCode);
         console.log(`${playerName} joined room ${roomCode}`);
-        console.log("Updated room state:\n", rooms[roomCode]);
 
         // Notify all players in room about updated player list
         io.to(roomCode).emit("update-players", rooms[roomCode]);
@@ -140,12 +174,37 @@ function registerRoomHandlers(io, socket, rooms) {
 
         // Check if all players have submitted words
         if (rooms[roomCode].gameConfig.numPlayersWithSubmittedWords >= rooms[roomCode].gameConfig.numPlayers) {
-            console.log(`All players have submitted words in room ${roomCode}. Transitioning to next phase.`);
+            console.log(`All players have submitted words in room ${roomCode}. Initializing game.`);
 
-            // Transition to next game phase (not implemented yet)
-            rooms[roomCode].gamePhase = "unknown";
+            const room = rooms[roomCode];
+            const teamNames = Object.keys(room.teamLookup);
+            const scores = {};
+            const clueGiverRotation = {};
+            teamNames.forEach(name => {
+                scores[name] = [0, 0, 0];
+                clueGiverRotation[name] = 0;
+            });
 
-            // Notify all players in room about updated game state
+            room.activeGame = {
+                currentRound: 1,
+                rounds: [
+                    { name: "Describe It", description: "Use as many words as you want to describe the word or phrase. No acting, no gestures!" },
+                    { name: "One Word", description: "Say only ONE word as a clue. No gestures, no sounds!" },
+                    { name: "Act It Out", description: "Act it out! No talking, no sounds allowed!" }
+                ],
+                teamOrder: teamNames,
+                currentTeamIndex: 0,
+                clueGiverRotation: clueGiverRotation,
+                currentClueGiver: room.teamLookup[teamNames[0]].members[0],
+                currentWord: null,
+                wordsRemaining: shuffleArray(getWordArray(room)),
+                wordsGuessedThisTurn: [],
+                turnDuration: 60,
+                turnTimeLeft: 60,
+                scores: scores
+            };
+
+            room.gamePhase = "round-start";
             io.to(roomCode).emit("all-words-submitted", rooms[roomCode]);
         }
     });

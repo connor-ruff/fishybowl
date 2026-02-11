@@ -3,6 +3,7 @@ const { createServer } = require("http");
 const { Server } = require("socket.io");
 const { registerRoomHandlers } = require('./handlers/roomHandlers');
 const { registerConnectionHandlers } = require('./handlers/connectionHandlers');
+const { registerGameHandlers } = require('./handlers/gameHandlers');
 
 const app = express();
 const httpServer = createServer(app);
@@ -24,6 +25,7 @@ io.on("connection", (socket) => {
 
     registerRoomHandlers(io, socket, rooms);
     registerConnectionHandlers(io, socket, rooms);
+    registerGameHandlers(io, socket, rooms);
 
 
 });
