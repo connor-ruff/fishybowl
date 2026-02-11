@@ -48,9 +48,17 @@ function startTurnTimer(io, roomCode, rooms) {
         r.activeGame.turnTimeLeft -= 1;
         if (r.activeGame.turnTimeLeft <= 0) {
             clearTurnTimer(roomCode);
-            if (r.activeGame.currentWord) {
-                r.activeGame.wordsRemaining.unshift(r.activeGame.currentWord);
-                r.activeGame.currentWord = null;
+            const g = r.activeGame;
+            g.turnHistory.push({
+                round: g.currentRound,
+                team: g.teamOrder[g.currentTeamIndex],
+                clueGiver: g.currentClueGiver,
+                wordsGuessed: g.wordsGuessedThisTurn.length,
+                skips: g.skipsThisTurn
+            });
+            if (g.currentWord) {
+                g.wordsRemaining.unshift(g.currentWord);
+                g.currentWord = null;
             }
             r.gamePhase = "turn-end";
             io.to(roomCode).emit("game-state-update", r);

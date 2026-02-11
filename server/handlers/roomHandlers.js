@@ -179,9 +179,15 @@ function registerRoomHandlers(io, socket, rooms) {
             const room = rooms[roomCode];
             const teamNames = Object.keys(room.teamLookup);
             const scores = {};
+            const wordsCorrect = {};
+            const skipPenalties = {};
+            const hostAdjustments = {};
             const clueGiverRotation = {};
             teamNames.forEach(name => {
                 scores[name] = [0, 0, 0];
+                wordsCorrect[name] = [0, 0, 0];
+                skipPenalties[name] = [0, 0, 0];
+                hostAdjustments[name] = 0;
                 clueGiverRotation[name] = 0;
             });
 
@@ -189,8 +195,8 @@ function registerRoomHandlers(io, socket, rooms) {
                 currentRound: 1,
                 rounds: [
                     { name: "Describe It", description: "Use as many words as you want to describe the word or phrase. No acting, no gestures!" },
-                    { name: "One Word", description: "Say only ONE word as a clue. No gestures, no sounds!" },
-                    { name: "Act It Out", description: "Act it out! No talking, no sounds allowed!" }
+                    { name: "Act It Out", description: "Act it out! No talking, no sounds allowed!" },
+                    { name: "One Word", description: "Say only ONE word as a clue. No gestures, no sounds!" }
                 ],
                 teamOrder: teamNames,
                 currentTeamIndex: 0,
@@ -199,9 +205,14 @@ function registerRoomHandlers(io, socket, rooms) {
                 currentWord: null,
                 wordsRemaining: shuffleArray(getWordArray(room)),
                 wordsGuessedThisTurn: [],
+                skipsThisTurn: 0,
+                turnHistory: [],
                 turnDuration: 60,
                 turnTimeLeft: 60,
-                scores: scores
+                scores: scores,
+                wordsCorrect: wordsCorrect,
+                skipPenalties: skipPenalties,
+                hostAdjustments: hostAdjustments
             };
 
             room.gamePhase = "round-start";

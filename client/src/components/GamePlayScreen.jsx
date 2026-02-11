@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 function GamePlayScreen({
     gameState, setGameState, error, setError, socket,
     handleStartRound, handleStartTurn, handleWordGuessed,
-    handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain
+    handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
+    handleAdjustScore
 }) {
     const serverState = gameState.serverState;
     const gamePhase = serverState.gamePhase;
@@ -33,10 +34,12 @@ function GamePlayScreen({
         setTimeLeft(activeGame.turnTimeLeft);
     }, [gamePhase, activeGame.turnTimeLeft]);
 
-    // Compute total scores per team
+    // Compute total scores per team (round scores + host adjustments)
     const totalScores = {};
     activeGame.teamOrder.forEach(team => {
-        totalScores[team] = activeGame.scores[team].reduce((a, b) => a + b, 0);
+        const roundTotal = activeGame.scores[team].reduce((a, b) => a + b, 0);
+        const hostAdj = activeGame.hostAdjustments?.[team] || 0;
+        totalScores[team] = roundTotal + hostAdj;
     });
 
     // ─── Player info header (shown on every screen) ───
@@ -71,25 +74,56 @@ function GamePlayScreen({
     }
 
     // ─── Scoreboard widget (reused across views) ───
+    const turnHistory = activeGame.turnHistory || [];
+
     const Scoreboard = ({ showRoundBreakdown }) => (
         <div style={{ marginTop: 20, padding: 15, background: '#2c2c2c', borderRadius: 8, color: '#f0f0f0', border: '1px solid #444' }}>
             <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Scoreboard</h3>
-            {activeGame.teamOrder.map(team => (
-                <div key={team} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    padding: '6px 0', borderBottom: '1px solid #555'
-                }}>
-                    <span style={{ fontWeight: team === currentTeamName ? 'bold' : 'normal', color: '#f0f0f0' }}>
-                        {team}
-                    </span>
-                    <span style={{ color: '#f0f0f0' }}>
-                        {showRoundBreakdown
-                            ? `${totalScores[team]} (${activeGame.scores[team].slice(0, activeGame.currentRound).join(' + ')})`
-                            : totalScores[team]
-                        }
-                    </span>
-                </div>
-            ))}
+            {activeGame.teamOrder.map(team => {
+                const hostAdj = activeGame.hostAdjustments?.[team] || 0;
+                return (
+                    <div key={team} style={{ padding: '8px 0', borderBottom: '1px solid #555' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontWeight: team === currentTeamName ? 'bold' : 'normal', color: '#f0f0f0', fontSize: 16 }}>
+                                {team}
+                            </span>
+                            <span style={{ color: '#f0f0f0', fontWeight: 'bold', fontSize: 16 }}>
+                                {totalScores[team]}
+                            </span>
+                        </div>
+                        {showRoundBreakdown && (
+                            <div style={{ marginTop: 6, paddingLeft: 10, fontSize: 13, color: '#aaa' }}>
+                                {activeGame.scores[team].slice(0, activeGame.currentRound).map((roundScore, ri) => {
+                                    const roundTurns = turnHistory.filter(t => t.team === team && t.round === ri + 1);
+                                    return (
+                                        <div key={ri} style={{ marginBottom: 4 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ccc' }}>
+                                                <span>R{ri + 1}: {activeGame.rounds[ri].name}</span>
+                                                <span>{roundScore} pts</span>
+                                            </div>
+                                            {roundTurns.map((turn, ti) => (
+                                                <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
+                                                    <span>{turn.clueGiver}</span>
+                                                    <span>
+                                                        +{turn.wordsGuessed}w
+                                                        {turn.skips > 0 && ` −${turn.skips}skip`}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                                {hostAdj !== 0 && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#f0ad4e' }}>
+                                        <span>Host adjustment</span>
+                                        <span>{hostAdj > 0 ? '+' : ''}{hostAdj}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
         </div>
     );
 
@@ -268,7 +302,7 @@ function GamePlayScreen({
                         {activeGame.wordsGuessedThisTurn.map((word, i) => (
                             <li key={i} style={{
                                 padding: '8px 16px', margin: '5px auto',
-                                background: '#d4edda', borderRadius: 6,
+                                background: '#1a3d2a', color: '#c8e6c9', borderRadius: 6,
                                 maxWidth: 300
                             }}>
                                 {word}
@@ -280,6 +314,47 @@ function GamePlayScreen({
                     {activeGame.wordsRemaining.length} words remaining this round
                 </p>
                 <Scoreboard showRoundBreakdown={false} />
+
+                {/* Host score adjustment */}
+                {isHost && (
+                    <div style={{ marginTop: 25, padding: 15, background: '#2c2c2c', borderRadius: 8, border: '1px solid #444' }}>
+                        <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Adjust Scores</h3>
+                        {activeGame.teamOrder.map(team => (
+                            <div key={team} style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                padding: '6px 0', borderBottom: '1px solid #555'
+                            }}>
+                                <span style={{ color: '#f0f0f0', minWidth: 100 }}>{team}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <button
+                                        onClick={() => handleAdjustScore(team, -1)}
+                                        style={{
+                                            width: 32, height: 32, fontSize: 18,
+                                            backgroundColor: '#dc3545', color: 'white',
+                                            border: 'none', borderRadius: 6, cursor: 'pointer'
+                                        }}
+                                    >
+                                        -
+                                    </button>
+                                    <span style={{ color: '#f0f0f0', fontWeight: 'bold', minWidth: 30, textAlign: 'center' }}>
+                                        {totalScores[team]}
+                                    </span>
+                                    <button
+                                        onClick={() => handleAdjustScore(team, 1)}
+                                        style={{
+                                            width: 32, height: 32, fontSize: 18,
+                                            backgroundColor: '#28a745', color: 'white',
+                                            border: 'none', borderRadius: 6, cursor: 'pointer'
+                                        }}
+                                    >
+                                        +
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {isHost && (
                     <button
                         onClick={handleNextTurn}
@@ -315,7 +390,7 @@ function GamePlayScreen({
                         <div key={team} style={{
                             padding: '8px 20px', margin: '5px auto',
                             maxWidth: 300, display: 'flex', justifyContent: 'space-between',
-                            background: '#f5f5f5', borderRadius: 6
+                            background: '#2c2c2c', color: '#f0f0f0', borderRadius: 6
                         }}>
                             <span>{team}</span>
                             <span style={{ fontWeight: 'bold' }}>
@@ -326,6 +401,46 @@ function GamePlayScreen({
                 </div>
 
                 <Scoreboard showRoundBreakdown />
+
+                {/* Host score adjustment */}
+                {isHost && (
+                    <div style={{ marginTop: 25, padding: 15, background: '#2c2c2c', borderRadius: 8, border: '1px solid #444' }}>
+                        <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Adjust Scores</h3>
+                        {activeGame.teamOrder.map(team => (
+                            <div key={team} style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                padding: '6px 0', borderBottom: '1px solid #555'
+                            }}>
+                                <span style={{ color: '#f0f0f0', minWidth: 100 }}>{team}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <button
+                                        onClick={() => handleAdjustScore(team, -1)}
+                                        style={{
+                                            width: 32, height: 32, fontSize: 18,
+                                            backgroundColor: '#dc3545', color: 'white',
+                                            border: 'none', borderRadius: 6, cursor: 'pointer'
+                                        }}
+                                    >
+                                        -
+                                    </button>
+                                    <span style={{ color: '#f0f0f0', fontWeight: 'bold', minWidth: 30, textAlign: 'center' }}>
+                                        {totalScores[team]}
+                                    </span>
+                                    <button
+                                        onClick={() => handleAdjustScore(team, 1)}
+                                        style={{
+                                            width: 32, height: 32, fontSize: 18,
+                                            backgroundColor: '#28a745', color: 'white',
+                                            border: 'none', borderRadius: 6, cursor: 'pointer'
+                                        }}
+                                    >
+                                        +
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 {isHost && (
                     <button
@@ -368,19 +483,51 @@ function GamePlayScreen({
 
                 <div style={{ marginTop: 20 }}>
                     <h3>Final Scores</h3>
-                    {sortedTeams.map((team, i) => (
-                        <div key={team} style={{
-                            padding: '12px 20px', margin: '8px auto',
-                            maxWidth: 400, display: 'flex', justifyContent: 'space-between',
-                            background: i === 0 && !isTie ? '#fff3cd' : '#f5f5f5',
-                            borderRadius: 8, border: i === 0 && !isTie ? '2px solid #ffc107' : '1px solid #ddd'
-                        }}>
-                            <span style={{ fontWeight: 'bold' }}>{team}</span>
-                            <span>
-                                {totalScores[team]} total ({activeGame.scores[team].join(' + ')})
-                            </span>
-                        </div>
-                    ))}
+                    {sortedTeams.map((team, i) => {
+                        const hostAdj = activeGame.hostAdjustments?.[team] || 0;
+                        return (
+                            <div key={team} style={{
+                                padding: '12px 20px', margin: '8px auto',
+                                maxWidth: 400, textAlign: 'left',
+                                background: i === 0 && !isTie ? '#3d3000' : '#2c2c2c',
+                                color: '#f0f0f0',
+                                borderRadius: 8, border: i === 0 && !isTie ? '2px solid #ffc107' : '1px solid #444'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                                    <span style={{ fontWeight: 'bold', fontSize: 16 }}>{team}</span>
+                                    <span style={{ fontWeight: 'bold', fontSize: 16 }}>{totalScores[team]}</span>
+                                </div>
+                                <div style={{ fontSize: 13, color: '#aaa', paddingLeft: 8 }}>
+                                    {activeGame.scores[team].map((roundScore, ri) => {
+                                        const roundTurns = turnHistory.filter(t => t.team === team && t.round === ri + 1);
+                                        return (
+                                            <div key={ri} style={{ marginBottom: 4 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ccc' }}>
+                                                    <span>R{ri + 1}: {activeGame.rounds[ri].name}</span>
+                                                    <span>{roundScore} pts</span>
+                                                </div>
+                                                {roundTurns.map((turn, ti) => (
+                                                    <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
+                                                        <span>{turn.clueGiver}</span>
+                                                        <span>
+                                                            +{turn.wordsGuessed}w
+                                                            {turn.skips > 0 && ` −${turn.skips}skip`}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        );
+                                    })}
+                                    {hostAdj !== 0 && (
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#f0ad4e' }}>
+                                            <span>Host adjustment</span>
+                                            <span>{hostAdj > 0 ? '+' : ''}{hostAdj}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
 
                 {isHost && (

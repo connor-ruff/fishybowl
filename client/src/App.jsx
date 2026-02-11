@@ -100,7 +100,8 @@ function App() {
     handleCreateRoom, handleJoinRoom, handleStartGame,
     handleSubmitGameConfig, handleSubmitWords,
     handleStartRound, handleStartTurn, handleWordGuessed,
-    handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain
+    handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
+    handleAdjustScore
   } = useGameHandlers(socket, gameState, setGameState, setError);
 
 
@@ -179,6 +180,7 @@ function App() {
         handleNextTurn={handleNextTurn}
         handleNextRound={handleNextRound}
         handlePlayAgain={handlePlayAgain}
+        handleAdjustScore={handleAdjustScore}
       />
     );
   }

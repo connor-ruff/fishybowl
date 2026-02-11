@@ -39,6 +39,7 @@ function registerGameHandlers(io, socket, rooms) {
 
         game.currentWord = game.wordsRemaining.pop();
         game.wordsGuessedThisTurn = [];
+        game.skipsThisTurn = 0;
         game.turnTimeLeft = game.turnDuration;
         room.gamePhase = "turn-active";
 
@@ -60,6 +61,7 @@ function registerGameHandlers(io, socket, rooms) {
         const teamName = game.teamOrder[game.currentTeamIndex];
         const roundIdx = game.currentRound - 1;
         game.scores[teamName][roundIdx] += 1;
+        game.wordsCorrect[teamName][roundIdx] += 1;
         room.teamLookup[teamName].score += 1;
 
         game.wordsGuessedThisTurn.push(game.currentWord);
@@ -72,6 +74,13 @@ function registerGameHandlers(io, socket, rooms) {
         // Draw next word or end round
         if (game.wordsRemaining.length === 0) {
             clearTurnTimer(roomCode);
+            game.turnHistory.push({
+                round: game.currentRound,
+                team: game.teamOrder[game.currentTeamIndex],
+                clueGiver: game.currentClueGiver,
+                wordsGuessed: game.wordsGuessedThisTurn.length,
+                skips: game.skipsThisTurn
+            });
             game.currentWord = null;
             room.gamePhase = "round-end";
             broadcastState(io, roomCode, rooms);
@@ -91,12 +100,33 @@ function registerGameHandlers(io, socket, rooms) {
         const game = room.activeGame;
         if (!game.currentWord) return callback({ success: false, error: "No active word" });
 
+        // -1 point penalty for skipping
+        const teamName = game.teamOrder[game.currentTeamIndex];
+        const roundIdx = game.currentRound - 1;
+        game.scores[teamName][roundIdx] -= 1;
+        game.skipPenalties[teamName][roundIdx] += 1;
+        game.skipsThisTurn += 1;
+        room.teamLookup[teamName].score -= 1;
+
         // Put current word back at a random position in the pool
         const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
         game.wordsRemaining.splice(insertIdx, 0, game.currentWord);
 
         // Draw the next word (from the end, so it's different unless only 1 word)
         game.currentWord = game.wordsRemaining.pop();
+
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
+
+    // Host adjusts a team's total score (tracked separately from round scores)
+    socket.on("adjust-score", (roomCode, teamName, delta, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const game = room.activeGame;
+        game.hostAdjustments[teamName] += delta;
+        room.teamLookup[teamName].score += delta;
 
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });

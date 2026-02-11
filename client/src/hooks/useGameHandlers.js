@@ -158,9 +158,21 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
     const handleNextRound = useCallback(() => emitGameAction("next-round"), [emitGameAction]);
     const handlePlayAgain = useCallback(() => emitGameAction("play-again"), [emitGameAction]);
 
+    const handleAdjustScore = useCallback((teamName, delta) => {
+        socket.emit("adjust-score", gameState.clientState.roomCode, teamName, delta, (res) => {
+            if (res.success) {
+                setGameState(prev => ({
+                    ...prev,
+                    serverState: res.gameState,
+                    clientState: { ...prev.clientState, clientGamePhase: res.gameState.gamePhase }
+                }));
+            }
+        });
+    }, [socket, gameState.clientState.roomCode, setGameState]);
+
   return {
     handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords,
     handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
-    handleNextTurn, handleNextRound, handlePlayAgain
+    handleNextTurn, handleNextRound, handlePlayAgain, handleAdjustScore
   };
 }
