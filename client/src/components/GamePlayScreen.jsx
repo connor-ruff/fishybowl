@@ -385,6 +385,11 @@ function GamePlayScreen({
                 <PlayerHeader />
                 <h1>Round {activeGame.currentRound} Complete!</h1>
                 <h2>{currentRound.name}</h2>
+                {activeGame.carriedTimeLeft && (
+                    <p style={{ color: '#f0ad4e', marginTop: 10 }}>
+                        {currentTeamName} cleared the bowl with {activeGame.carriedTimeLeft}s left — they'll start the next round!
+                    </p>
+                )}
 
                 {/* Round scores */}
                 <div style={{ marginTop: 20 }}>

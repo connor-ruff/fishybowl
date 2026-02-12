@@ -40,7 +40,8 @@ function registerGameHandlers(io, socket, rooms) {
         game.currentWord = game.wordsRemaining.pop();
         game.wordsGuessedThisTurn = [];
         game.skipsThisTurn = 0;
-        game.turnTimeLeft = game.turnDuration;
+        game.turnTimeLeft = game.carriedTimeLeft || game.turnDuration;
+        game.carriedTimeLeft = null;
         room.gamePhase = "turn-active";
 
         broadcastState(io, roomCode, rooms);
@@ -82,6 +83,14 @@ function registerGameHandlers(io, socket, rooms) {
                 skips: game.skipsThisTurn
             });
             game.currentWord = null;
+
+            // For rounds 1-2, carry remaining time so this team continues into the next round
+            if (game.currentRound < 3 && game.turnTimeLeft > 0) {
+                game.carriedTimeLeft = game.turnTimeLeft;
+            } else {
+                game.carriedTimeLeft = null;
+            }
+
             room.gamePhase = "round-end";
             broadcastState(io, roomCode, rooms);
             return callback({ success: true, gameState: room });
@@ -173,6 +182,8 @@ function registerGameHandlers(io, socket, rooms) {
             return callback({ success: true, gameState: room });
         }
 
+        const carriedTime = game.carriedTimeLeft;
+
         // Advance clue giver for the team that was playing when round ended
         const lastTeam = game.teamOrder[game.currentTeamIndex];
         game.clueGiverRotation[lastTeam] += 1;
@@ -180,9 +191,15 @@ function registerGameHandlers(io, socket, rooms) {
         game.currentRound += 1;
         game.wordsRemaining = shuffleArray(getWordArray(room));
 
-        // Next team starts the new round
-        game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
-        game.currentClueGiver = getCurrentClueGiver(room);
+        if (carriedTime) {
+            // Same team continues with their leftover time
+            game.currentClueGiver = getCurrentClueGiver(room);
+        } else {
+            // Normal rotation: next team starts the new round
+            game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
+            game.currentClueGiver = getCurrentClueGiver(room);
+        }
+
         game.currentWord = null;
         game.wordsGuessedThisTurn = [];
 

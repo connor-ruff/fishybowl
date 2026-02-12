@@ -209,6 +209,7 @@ function registerRoomHandlers(io, socket, rooms) {
                 turnHistory: [],
                 turnDuration: 60,
                 turnTimeLeft: 60,
+                carriedTimeLeft: null,
                 scores: scores,
                 wordsCorrect: wordsCorrect,
                 skipPenalties: skipPenalties,
