@@ -103,7 +103,7 @@ function GamePlayScreen({
                                             </div>
                                             {roundTurns.map((turn, ti) => (
                                                 <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
-                                                    <span>{turn.clueGiver}</span>
+                                                    <span>Turn {ti + 1}</span>
                                                     <span>
                                                         +{turn.wordsGuessed}w
                                                         {turn.skips > 0 && ` −${turn.skips}skip`}
@@ -228,10 +228,13 @@ function GamePlayScreen({
                         </button>
                         <button
                             onClick={handleSkipWord}
+                            disabled={activeGame.wordsRemaining.length === 0}
                             style={{
                                 padding: '15px 40px', fontSize: 18,
-                                backgroundColor: '#6c757d', color: 'white',
-                                border: 'none', borderRadius: 8, cursor: 'pointer'
+                                backgroundColor: activeGame.wordsRemaining.length === 0 ? '#444' : '#6c757d',
+                                color: activeGame.wordsRemaining.length === 0 ? '#777' : 'white',
+                                border: 'none', borderRadius: 8,
+                                cursor: activeGame.wordsRemaining.length === 0 ? 'not-allowed' : 'pointer'
                             }}
                         >
                             Skip
@@ -508,7 +511,7 @@ function GamePlayScreen({
                                                 </div>
                                                 {roundTurns.map((turn, ti) => (
                                                     <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
-                                                        <span>{turn.clueGiver}</span>
+                                                        <span>Turn {ti + 1}</span>
                                                         <span>
                                                             +{turn.wordsGuessed}w
                                                             {turn.skips > 0 && ` −${turn.skips}skip`}

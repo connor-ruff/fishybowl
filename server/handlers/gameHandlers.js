@@ -100,6 +100,11 @@ function registerGameHandlers(io, socket, rooms) {
         const game = room.activeGame;
         if (!game.currentWord) return callback({ success: false, error: "No active word" });
 
+        // Can't skip if this is the only word left
+        if (game.wordsRemaining.length === 0) {
+            return callback({ success: false, error: "Only one word remaining" });
+        }
+
         // -1 point penalty for skipping
         const teamName = game.teamOrder[game.currentTeamIndex];
         const roundIdx = game.currentRound - 1;
@@ -108,12 +113,11 @@ function registerGameHandlers(io, socket, rooms) {
         game.skipsThisTurn += 1;
         room.teamLookup[teamName].score -= 1;
 
-        // Put current word back at a random position in the pool
-        const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
-        game.wordsRemaining.splice(insertIdx, 0, game.currentWord);
-
-        // Draw the next word (from the end, so it's different unless only 1 word)
+        // Draw a different word first, then put the skipped word back
+        const skippedWord = game.currentWord;
         game.currentWord = game.wordsRemaining.pop();
+        const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
+        game.wordsRemaining.splice(insertIdx, 0, skippedWord);
 
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
