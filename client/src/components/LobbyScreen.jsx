@@ -1,38 +1,36 @@
-function LobbyScreen({ 
-  gameState, 
-  setGameState, 
-  error, 
+function LobbyScreen({
+  gameState,
+  setGameState,
+  error,
   setError,
   handleStartGame
 }) {
-
   return (
+    <div className="page">
+      <div className="card card-center">
+        <h1 className="title title-sm">Room: {gameState.clientState.roomCode}</h1>
+        <p className="subtitle">Playing as {gameState.clientState.playerName}</p>
 
-    <div style={{ padding: 40 }}>
-        <h1>Room: {gameState.clientState.roomCode}</h1>
-        <h2>Current Player: {gameState.clientState.playerName}</h2>
-        <h2>Player List:</h2>
-        <ul>
+        <ul className="player-list">
           {gameState.serverState.players.map((p) => (
-            <li key={p.name}>{p.name}{p.is_host ? ' (Host)' : ''}</li>
+            <li key={p.name}>
+              <span>{p.name}</span>
+              {p.is_host && <span className="host-badge">Host</span>}
+            </li>
           ))}
         </ul>
 
-        <button 
-          onClick={handleStartGame} 
-          disabled={!gameState.clientState.playerIsHost}
-          style={{
-            marginLeft: 10,
-            backgroundColor: gameState.clientState.playerIsHost ? '#007bff' : '#6c757d',
-            color: 'white',
-            cursor: gameState.clientState.playerIsHost ? 'pointer' : 'not-allowed',
-            opacity: gameState.clientState.playerIsHost ? 1 : 0.6
-          }}
-        >
-          {gameState.clientState.playerIsHost ? 'Start Game' : 'Start Game (Host Only)'}
-        </button>
-        
+        {gameState.clientState.playerIsHost ? (
+          <button className="btn-primary" onClick={handleStartGame}>
+            Start Game
+          </button>
+        ) : (
+          <p className="muted text-center">Waiting for host to start...</p>
+        )}
+
+        {error && <p className="error-text">{error}</p>}
       </div>
+    </div>
   );
 }
 

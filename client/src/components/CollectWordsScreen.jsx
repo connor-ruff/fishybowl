@@ -7,7 +7,6 @@ function CollectWordsScreen({
     const wordsPerPlayer = gameState?.serverState?.gameConfig?.wordsPerPlayer || 0;
     const [words, setWords] = useState(() => Array(wordsPerPlayer).fill(''));
 
-    // Initialize words array when wordsPerPlayer changes
     useEffect(() => {
         setWords(Array(wordsPerPlayer).fill(''));
     }, [wordsPerPlayer]);
@@ -19,79 +18,46 @@ function CollectWordsScreen({
     };
 
     const handleSubmitWords_component = () => {
-        // Filter out empty words and trim whitespace
         const submittedWords = words.map(word => word.trim()).filter(word => word.length > 0);
-        
+
         if (submittedWords.length < wordsPerPlayer) {
             setError(`Please enter all ${wordsPerPlayer} words/phrases.`);
             return;
         }
 
-        // TODO: Send words to server
         console.log('Submitting words:', submittedWords);
         handleSubmitWords(submittedWords);
-        
-        // Clear any previous errors
         setError('');
     };
 
     const allWordsFilled = words.every(word => word.trim().length > 0);
 
     return (
-        <div style={{ padding: 40 }}>
-            <h2>Enter Your Words/Phrases</h2>
-            <p>Enter {wordsPerPlayer} words or phrases below:</p>
-            
-            <div style={{ marginTop: 20 }}>
+        <div className="page">
+            <div className="card">
+                <h1 className="title title-sm">Your Words</h1>
+                <p className="subtitle">Enter {wordsPerPlayer} words or phrases</p>
+
                 {words.map((word, index) => (
-                    <div key={index} style={{ marginBottom: 15 }}>
-                        <label style={{ display: 'block', marginBottom: 5 }}>
-                            Word/Phrase {index + 1}:
-                        </label>
+                    <div key={index} className="word-input-group">
+                        <label>Word {index + 1}</label>
                         <input
+                            className="themed-input"
                             type="text"
                             value={word}
                             onChange={(e) => handleWordChange(index, e.target.value)}
                             placeholder={`Enter word or phrase ${index + 1}`}
-                            style={{ 
-                                width: '100%', 
-                                padding: 10, 
-                                fontSize: 16,
-                                border: '1px solid #ccc',
-                                borderRadius: 4
-                            }}
-                            maxLength={100} // Reasonable limit for words/phrases
+                            maxLength={100}
                         />
                     </div>
                 ))}
-            </div>
 
-            {error && (
-                <div style={{ 
-                    color: 'red', 
-                    marginTop: 20, 
-                    padding: 10, 
-                    border: '1px solid red', 
-                    borderRadius: 4,
-                    backgroundColor: '#ffebee'
-                }}>
-                    {error}
-                </div>
-            )}
+                {error && <p className="error-text">{error}</p>}
 
-            <div style={{ marginTop: 30 }}>
-                <button 
+                <button
+                    className="btn-success"
                     onClick={handleSubmitWords_component}
                     disabled={!allWordsFilled}
-                    style={{ 
-                        padding: '10px 20px',
-                        fontSize: 16,
-                        backgroundColor: allWordsFilled ? '#4CAF50' : '#ccc',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 4,
-                        cursor: allWordsFilled ? 'pointer' : 'not-allowed'
-                    }}
                 >
                     Submit Words
                 </button>

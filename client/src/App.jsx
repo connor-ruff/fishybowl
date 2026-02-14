@@ -7,7 +7,7 @@ import CollectWordsScreen from "./components/CollectWordsScreen";
 import GamePlayScreen from "./components/GamePlayScreen";
 import { useGameHandlers } from './hooks/useGameHandlers';
 
-const socket = io("http://localhost:3001");
+const socket = io();
 
 const GAMEPLAY_PHASES = ["round-start", "turn-ready", "turn-active", "turn-end", "round-end", "game-over", "paused"];
 
@@ -158,9 +158,11 @@ function App() {
 
   else if (gameState.clientState.clientGamePhase === "collecting-words-waiting-for-others") {
     return (
-      <div style={{ padding: 40 }}>
-        <h2>Waiting for Other Players...</h2>
-        <p>You have submitted your words/phrases. Please wait for other players to finish.</p>
+      <div className="page">
+        <div className="card card-center">
+          <h1 className="title title-sm">Words Submitted!</h1>
+          <p className="muted">Waiting for other players to finish...</p>
+        </div>
       </div>
     );
   }
@@ -188,9 +190,11 @@ function App() {
   else {
     return (
       console.log("Unknown game state:\n", gameState) ||
-      <div style={{ padding: 40 }}>
-        <h1>Unknown Game State:</h1>
-        <pre>{JSON.stringify(gameState, null, 2)}</pre>
+      <div className="page">
+        <div className="card">
+          <h1 className="title title-sm">Unknown Game State</h1>
+          <pre style={{ fontSize: '0.7em', overflow: 'auto' }}>{JSON.stringify(gameState, null, 2)}</pre>
+        </div>
       </div>
     );
   }

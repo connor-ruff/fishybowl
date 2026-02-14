@@ -16,11 +16,9 @@ function GamePlayScreen({
     const currentTeamName = activeGame.teamOrder[activeGame.currentTeamIndex];
     const isClueGiver = activeGame.currentClueGiver === playerName;
 
-    // Which team is the current player on?
     const playerTeam = serverState.playerLookup[playerName]?.team;
     const isOnActiveTeam = playerTeam === currentTeamName;
 
-    // Local timer state — updated by server events for smooth display
     const [timeLeft, setTimeLeft] = useState(activeGame.turnTimeLeft);
 
     useEffect(() => {
@@ -29,12 +27,10 @@ function GamePlayScreen({
         return () => socket.off("timer-update", onTimer);
     }, [socket]);
 
-    // Sync with server state when phase changes
     useEffect(() => {
         setTimeLeft(activeGame.turnTimeLeft);
     }, [gamePhase, activeGame.turnTimeLeft]);
 
-    // Compute total scores per team (round scores + host adjustments)
     const totalScores = {};
     activeGame.teamOrder.forEach(team => {
         const roundTotal = activeGame.scores[team].reduce((a, b) => a + b, 0);
@@ -42,67 +38,46 @@ function GamePlayScreen({
         totalScores[team] = roundTotal + hostAdj;
     });
 
-    // ─── Player info header (shown on every screen) ───
+    const timerClass = timeLeft <= 10 ? 'timer-danger' : timeLeft <= 20 ? 'timer-warn' : 'timer-ok';
+    const turnHistory = activeGame.turnHistory || [];
+
+    // ─── Player info header ───
     const PlayerHeader = () => (
-        <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '8px 16px', marginBottom: 20,
-            background: '#2c2c2c', borderRadius: 8, color: '#f0f0f0',
-            fontSize: 14, border: '1px solid #444'
-        }}>
+        <div className="player-header">
             <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
             <span>{playerName}</span>
             <span>{playerTeam}</span>
         </div>
     );
 
-    // ─── Paused screen ───
-    if (gamePhase === "paused") {
-        const disconnectedPlayers = serverState.players.filter(p => p.connected === false);
-        return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <h1>Game Paused</h1>
-                <p style={{ fontSize: 18, marginTop: 20 }}>
-                    Waiting for {disconnectedPlayers.map(p => p.name).join(', ')} to reconnect...
-                </p>
-                <p style={{ color: '#888', marginTop: 10 }}>
-                    They can rejoin by entering their name and room code <strong>{gameState.clientState.roomCode}</strong>
-                </p>
-            </div>
-        );
-    }
-
-    // ─── Scoreboard widget (reused across views) ───
-    const turnHistory = activeGame.turnHistory || [];
-
+    // ─── Scoreboard ───
     const Scoreboard = ({ showRoundBreakdown }) => (
-        <div style={{ marginTop: 20, padding: 15, background: '#2c2c2c', borderRadius: 8, color: '#f0f0f0', border: '1px solid #444' }}>
-            <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Scoreboard</h3>
+        <div className="panel">
+            <h3 className="panel-title">Scoreboard</h3>
             {activeGame.teamOrder.map(team => {
                 const hostAdj = activeGame.hostAdjustments?.[team] || 0;
                 return (
-                    <div key={team} style={{ padding: '8px 0', borderBottom: '1px solid #555' }}>
+                    <div key={team} className="panel-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ fontWeight: team === currentTeamName ? 'bold' : 'normal', color: '#f0f0f0', fontSize: 16 }}>
+                            <span style={{ fontWeight: team === currentTeamName ? 'bold' : 'normal' }}>
                                 {team}
                             </span>
-                            <span style={{ color: '#f0f0f0', fontWeight: 'bold', fontSize: 16 }}>
+                            <span style={{ fontWeight: 'bold' }}>
                                 {totalScores[team]}
                             </span>
                         </div>
                         {showRoundBreakdown && (
-                            <div style={{ marginTop: 6, paddingLeft: 10, fontSize: 13, color: '#aaa' }}>
+                            <div style={{ paddingLeft: 10, fontSize: '0.8em', marginTop: 4 }} className="muted">
                                 {activeGame.scores[team].slice(0, activeGame.currentRound).map((roundScore, ri) => {
                                     const roundTurns = turnHistory.filter(t => t.team === team && t.round === ri + 1);
                                     return (
                                         <div key={ri} style={{ marginBottom: 4 }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ccc' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
                                                 <span>R{ri + 1}: {activeGame.rounds[ri].name}</span>
                                                 <span>{roundScore} pts</span>
                                             </div>
                                             {roundTurns.map((turn, ti) => (
-                                                <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
+                                                <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: 12, fontSize: '0.85em', opacity: 0.7 }}>
                                                     <span>Turn {ti + 1}</span>
                                                     <span>
                                                         +{turn.wordsGuessed}w
@@ -114,7 +89,7 @@ function GamePlayScreen({
                                     );
                                 })}
                                 {hostAdj !== 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#f0ad4e' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ffc107' }}>
                                         <span>Host adjustment</span>
                                         <span>{hostAdj > 0 ? '+' : ''}{hostAdj}</span>
                                     </div>
@@ -127,35 +102,63 @@ function GamePlayScreen({
         </div>
     );
 
+    // ─── Score Adjustment (host only) ───
+    const ScoreAdjust = () => (
+        <div className="panel">
+            <h3 className="panel-title">Adjust Scores</h3>
+            {activeGame.teamOrder.map(team => (
+                <div key={team} className="panel-row">
+                    <span>{team}</span>
+                    <div className="score-adjust">
+                        <button className="btn-icon btn-icon-minus" onClick={() => handleAdjustScore(team, -1)}>-</button>
+                        <span className="score-value">{totalScores[team]}</span>
+                        <button className="btn-icon btn-icon-plus" onClick={() => handleAdjustScore(team, 1)}>+</button>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+
+    // ─── PAUSED ───
+    if (gamePhase === "paused") {
+        const disconnectedPlayers = serverState.players.filter(p => p.connected === false);
+        return (
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <h1 className="title title-sm">Game Paused</h1>
+                    <p>
+                        Waiting for {disconnectedPlayers.map(p => p.name).join(', ')} to reconnect...
+                    </p>
+                    <p className="muted">
+                        They can rejoin with room code <strong>{gameState.clientState.roomCode}</strong>
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     // ─── ROUND START ───
     if (gamePhase === "round-start") {
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <h1>Round {activeGame.currentRound} of 3</h1>
-                <h2>{currentRound.name}</h2>
-                <p style={{ fontSize: 18, color: '#555', maxWidth: 400, margin: '20px auto' }}>
-                    {currentRound.description}
-                </p>
-                <p style={{ marginTop: 20, color: '#777' }}>
-                    {activeGame.currentClueGiver} from {currentTeamName} goes first!
-                </p>
-                {activeGame.currentRound > 1 && <Scoreboard showRoundBreakdown />}
-                {isHost && (
-                    <button
-                        onClick={handleStartRound}
-                        style={{
-                            marginTop: 30, padding: '15px 40px', fontSize: 18,
-                            backgroundColor: '#007bff', color: 'white',
-                            border: 'none', borderRadius: 8, cursor: 'pointer'
-                        }}
-                    >
-                        Start Round
-                    </button>
-                )}
-                {!isHost && (
-                    <p style={{ marginTop: 30, color: '#999' }}>Waiting for host to start the round...</p>
-                )}
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <h1 className="title title-sm">Round {activeGame.currentRound} of 3</h1>
+                    <h2 style={{ margin: '0' }}>{currentRound.name}</h2>
+                    <p className="muted" style={{ maxWidth: 360, margin: '0 auto' }}>
+                        {currentRound.description}
+                    </p>
+                    <p className="muted">
+                        {activeGame.currentClueGiver} from {currentTeamName} goes first!
+                    </p>
+                    {activeGame.currentRound > 1 && <Scoreboard showRoundBreakdown />}
+                    {isHost ? (
+                        <button className="btn-primary" onClick={handleStartRound}>Start Round</button>
+                    ) : (
+                        <p className="muted">Waiting for host to start the round...</p>
+                    )}
+                </div>
             </div>
         );
     }
@@ -163,86 +166,53 @@ function GamePlayScreen({
     // ─── TURN READY ───
     if (gamePhase === "turn-ready") {
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <p style={{ color: '#777' }}>Round {activeGame.currentRound}: {currentRound.name}</p>
-                <h1>{currentTeamName}'s Turn</h1>
-                <h2>{activeGame.currentClueGiver} is giving clues</h2>
-                <p style={{ color: '#888' }}>
-                    {activeGame.wordsRemaining.length} words remaining
-                </p>
-                <Scoreboard showRoundBreakdown={false} />
-                {isClueGiver ? (
-                    <button
-                        onClick={handleStartTurn}
-                        style={{
-                            marginTop: 30, padding: '15px 40px', fontSize: 18,
-                            backgroundColor: '#28a745', color: 'white',
-                            border: 'none', borderRadius: 8, cursor: 'pointer'
-                        }}
-                    >
-                        I'm Ready — Start!
-                    </button>
-                ) : (
-                    <p style={{ marginTop: 30, color: '#999' }}>
-                        Waiting for {activeGame.currentClueGiver} to start...
-                    </p>
-                )}
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <p className="muted">Round {activeGame.currentRound}: {currentRound.name}</p>
+                    <h1 className="title title-sm">{currentTeamName}'s Turn</h1>
+                    <h2 style={{ margin: 0 }}>{activeGame.currentClueGiver} is giving clues</h2>
+                    <p className="muted">{activeGame.wordsRemaining.length} words remaining</p>
+                    <Scoreboard showRoundBreakdown={false} />
+                    {isClueGiver ? (
+                        <button className="btn-success" onClick={handleStartTurn}>
+                            I'm Ready — Start!
+                        </button>
+                    ) : (
+                        <p className="muted">
+                            Waiting for {activeGame.currentClueGiver} to start...
+                        </p>
+                    )}
+                </div>
             </div>
         );
     }
 
     // ─── TURN ACTIVE ───
     if (gamePhase === "turn-active") {
-        const timerColor = timeLeft <= 10 ? '#dc3545' : timeLeft <= 20 ? '#ffc107' : '#333';
 
         // Clue giver view
         if (isClueGiver) {
             return (
-                <div style={{ padding: 40, textAlign: 'center' }}>
-                    <PlayerHeader />
-                    <div style={{ fontSize: 48, fontWeight: 'bold', color: timerColor }}>
-                        {timeLeft}
-                    </div>
-                    <p style={{ color: '#777', marginBottom: 10 }}>
-                        Round {activeGame.currentRound}: {currentRound.name}
-                    </p>
-                    <div style={{
-                        margin: '20px auto', padding: '30px 40px',
-                        border: '3px solid #007bff', borderRadius: 12,
-                        fontSize: 28, fontWeight: 'bold', maxWidth: 400,
-                        background: '#003366', color: '#ffffff'
-                    }}>
-                        {activeGame.currentWord}
-                    </div>
-                    <div style={{ marginTop: 30, display: 'flex', justifyContent: 'center', gap: 20 }}>
-                        <button
-                            onClick={handleWordGuessed}
-                            style={{
-                                padding: '15px 40px', fontSize: 18,
-                                backgroundColor: '#28a745', color: 'white',
-                                border: 'none', borderRadius: 8, cursor: 'pointer'
-                            }}
-                        >
-                            Got It!
-                        </button>
-                        <button
-                            onClick={handleSkipWord}
-                            disabled={activeGame.wordsRemaining.length === 0}
-                            style={{
-                                padding: '15px 40px', fontSize: 18,
-                                backgroundColor: activeGame.wordsRemaining.length === 0 ? '#444' : '#6c757d',
-                                color: activeGame.wordsRemaining.length === 0 ? '#777' : 'white',
-                                border: 'none', borderRadius: 8,
-                                cursor: activeGame.wordsRemaining.length === 0 ? 'not-allowed' : 'pointer'
-                            }}
-                        >
-                            Skip
-                        </button>
-                    </div>
-                    <div style={{ marginTop: 20, color: '#888' }}>
-                        Guessed this turn: {activeGame.wordsGuessedThisTurn.length} |
-                        Remaining: {activeGame.wordsRemaining.length}
+                <div className="page">
+                    <div className="card card-center">
+                        <PlayerHeader />
+                        <div className={`timer ${timerClass}`}>{timeLeft}</div>
+                        <p className="muted">Round {activeGame.currentRound}: {currentRound.name}</p>
+                        <div className="word-card">{activeGame.currentWord}</div>
+                        <div className="btn-row">
+                            <button className="btn-success" onClick={handleWordGuessed}>Got It!</button>
+                            <button
+                                className="btn-danger"
+                                onClick={handleSkipWord}
+                                disabled={activeGame.wordsRemaining.length === 0}
+                            >
+                                Skip
+                            </button>
+                        </div>
+                        <p className="muted" style={{ fontSize: '0.85em' }}>
+                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                        </p>
                     </div>
                 </div>
             );
@@ -251,44 +221,36 @@ function GamePlayScreen({
         // Teammate view
         if (isOnActiveTeam) {
             return (
-                <div style={{ padding: 40, textAlign: 'center' }}>
-                    <PlayerHeader />
-                    <div style={{ fontSize: 48, fontWeight: 'bold', color: timerColor }}>
-                        {timeLeft}
+                <div className="page">
+                    <div className="card card-center">
+                        <PlayerHeader />
+                        <div className={`timer ${timerClass}`}>{timeLeft}</div>
+                        <p className="muted">Round {activeGame.currentRound}: {currentRound.name}</p>
+                        <h2 style={{ margin: 0 }}>{activeGame.currentClueGiver} is giving clues!</h2>
+                        <p style={{ fontSize: '1.2em', margin: '8px 0' }}>Guess the word!</p>
+                        <p className="muted" style={{ fontSize: '0.85em' }}>
+                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                        </p>
+                        <Scoreboard showRoundBreakdown={false} />
                     </div>
-                    <p style={{ color: '#777' }}>
-                        Round {activeGame.currentRound}: {currentRound.name}
-                    </p>
-                    <h2>{activeGame.currentClueGiver} is giving clues!</h2>
-                    <p style={{ fontSize: 20, marginTop: 20 }}>Guess the word!</p>
-                    <div style={{ marginTop: 20, color: '#888' }}>
-                        Guessed this turn: {activeGame.wordsGuessedThisTurn.length} |
-                        Remaining: {activeGame.wordsRemaining.length}
-                    </div>
-                    <Scoreboard showRoundBreakdown={false} />
                 </div>
             );
         }
 
         // Other team view
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <div style={{ fontSize: 48, fontWeight: 'bold', color: timerColor }}>
-                    {timeLeft}
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <div className={`timer ${timerClass}`}>{timeLeft}</div>
+                    <p className="muted">Round {activeGame.currentRound}: {currentRound.name}</p>
+                    <h2 style={{ margin: 0 }}>{currentTeamName} is playing...</h2>
+                    <p className="muted">{activeGame.currentClueGiver} is giving clues</p>
+                    <p className="muted" style={{ fontSize: '0.85em' }}>
+                        Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                    </p>
+                    <Scoreboard showRoundBreakdown={false} />
                 </div>
-                <p style={{ color: '#777' }}>
-                    Round {activeGame.currentRound}: {currentRound.name}
-                </p>
-                <h2>{currentTeamName} is playing...</h2>
-                <p style={{ color: '#888' }}>
-                    {activeGame.currentClueGiver} is giving clues
-                </p>
-                <div style={{ marginTop: 20, color: '#888' }}>
-                    Guessed this turn: {activeGame.wordsGuessedThisTurn.length} |
-                    Remaining: {activeGame.wordsRemaining.length}
-                </div>
-                <Scoreboard showRoundBreakdown={false} />
             </div>
         );
     }
@@ -296,83 +258,29 @@ function GamePlayScreen({
     // ─── TURN END ───
     if (gamePhase === "turn-end") {
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <h1>Time's Up!</h1>
-                <h2>{activeGame.currentClueGiver} got {activeGame.wordsGuessedThisTurn.length} word{activeGame.wordsGuessedThisTurn.length !== 1 ? 's' : ''}</h2>
-                {activeGame.wordsGuessedThisTurn.length > 0 && (
-                    <ul style={{ listStyle: 'none', padding: 0, marginTop: 15 }}>
-                        {activeGame.wordsGuessedThisTurn.map((word, i) => (
-                            <li key={i} style={{
-                                padding: '8px 16px', margin: '5px auto',
-                                background: '#1a3d2a', color: '#c8e6c9', borderRadius: 6,
-                                maxWidth: 300
-                            }}>
-                                {word}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-                <p style={{ marginTop: 15, color: '#888' }}>
-                    {activeGame.wordsRemaining.length} words remaining this round
-                </p>
-                <Scoreboard showRoundBreakdown={false} />
-
-                {/* Host score adjustment */}
-                {isHost && (
-                    <div style={{ marginTop: 25, padding: 15, background: '#2c2c2c', borderRadius: 8, border: '1px solid #444' }}>
-                        <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Adjust Scores</h3>
-                        {activeGame.teamOrder.map(team => (
-                            <div key={team} style={{
-                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '6px 0', borderBottom: '1px solid #555'
-                            }}>
-                                <span style={{ color: '#f0f0f0', minWidth: 100 }}>{team}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                    <button
-                                        onClick={() => handleAdjustScore(team, -1)}
-                                        style={{
-                                            width: 32, height: 32, fontSize: 18,
-                                            backgroundColor: '#dc3545', color: 'white',
-                                            border: 'none', borderRadius: 6, cursor: 'pointer'
-                                        }}
-                                    >
-                                        -
-                                    </button>
-                                    <span style={{ color: '#f0f0f0', fontWeight: 'bold', minWidth: 30, textAlign: 'center' }}>
-                                        {totalScores[team]}
-                                    </span>
-                                    <button
-                                        onClick={() => handleAdjustScore(team, 1)}
-                                        style={{
-                                            width: 32, height: 32, fontSize: 18,
-                                            backgroundColor: '#28a745', color: 'white',
-                                            border: 'none', borderRadius: 6, cursor: 'pointer'
-                                        }}
-                                    >
-                                        +
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {isHost && (
-                    <button
-                        onClick={handleNextTurn}
-                        style={{
-                            marginTop: 30, padding: '15px 40px', fontSize: 18,
-                            backgroundColor: '#007bff', color: 'white',
-                            border: 'none', borderRadius: 8, cursor: 'pointer'
-                        }}
-                    >
-                        Next Turn
-                    </button>
-                )}
-                {!isHost && (
-                    <p style={{ marginTop: 30, color: '#999' }}>Waiting for host to continue...</p>
-                )}
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <h1 className="title title-sm">Time's Up!</h1>
+                    <h2 style={{ margin: 0 }}>
+                        {activeGame.currentClueGiver} got {activeGame.wordsGuessedThisTurn.length} word{activeGame.wordsGuessedThisTurn.length !== 1 ? 's' : ''}
+                    </h2>
+                    {activeGame.wordsGuessedThisTurn.length > 0 && (
+                        <ul className="word-list">
+                            {activeGame.wordsGuessedThisTurn.map((word, i) => (
+                                <li key={i}>{word}</li>
+                            ))}
+                        </ul>
+                    )}
+                    <p className="muted">{activeGame.wordsRemaining.length} words remaining this round</p>
+                    <Scoreboard showRoundBreakdown={false} />
+                    {isHost && <ScoreAdjust />}
+                    {isHost ? (
+                        <button className="btn-primary" onClick={handleNextTurn}>Next Turn</button>
+                    ) : (
+                        <p className="muted">Waiting for host to continue...</p>
+                    )}
+                </div>
             </div>
         );
     }
@@ -381,98 +289,46 @@ function GamePlayScreen({
     if (gamePhase === "round-end") {
         const isLastRound = activeGame.currentRound >= 3;
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <h1>Round {activeGame.currentRound} Complete!</h1>
-                <h2>{currentRound.name}</h2>
-                {activeGame.carriedTimeLeft && (
-                    <p style={{ color: '#f0ad4e', marginTop: 10 }}>
-                        {currentTeamName} cleared the bowl with {activeGame.carriedTimeLeft}s left — they'll start the next round!
-                    </p>
-                )}
+            <div className="page">
+                <div className="card card-center">
+                    <PlayerHeader />
+                    <h1 className="title title-sm">Round {activeGame.currentRound} Complete!</h1>
+                    <h2 style={{ margin: 0 }}>{currentRound.name}</h2>
+                    {activeGame.carriedTimeLeft && (
+                        <p className="carried-time">
+                            {currentTeamName} cleared the bowl with {activeGame.carriedTimeLeft}s left — they'll start the next round!
+                        </p>
+                    )}
 
-                {/* Round scores */}
-                <div style={{ marginTop: 20 }}>
-                    <h3>Round {activeGame.currentRound} Results</h3>
-                    {activeGame.teamOrder.map(team => (
-                        <div key={team} style={{
-                            padding: '8px 20px', margin: '5px auto',
-                            maxWidth: 300, display: 'flex', justifyContent: 'space-between',
-                            background: '#2c2c2c', color: '#f0f0f0', borderRadius: 6
-                        }}>
-                            <span>{team}</span>
-                            <span style={{ fontWeight: 'bold' }}>
-                                {activeGame.scores[team][activeGame.currentRound - 1]} pts
-                            </span>
-                        </div>
-                    ))}
-                </div>
-
-                <Scoreboard showRoundBreakdown />
-
-                {/* Host score adjustment */}
-                {isHost && (
-                    <div style={{ marginTop: 25, padding: 15, background: '#2c2c2c', borderRadius: 8, border: '1px solid #444' }}>
-                        <h3 style={{ margin: '0 0 10px 0', color: '#fff' }}>Adjust Scores</h3>
+                    {/* Round scores */}
+                    <div className="panel">
+                        <h3 className="panel-title">Round {activeGame.currentRound} Results</h3>
                         {activeGame.teamOrder.map(team => (
-                            <div key={team} style={{
-                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '6px 0', borderBottom: '1px solid #555'
-                            }}>
-                                <span style={{ color: '#f0f0f0', minWidth: 100 }}>{team}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                    <button
-                                        onClick={() => handleAdjustScore(team, -1)}
-                                        style={{
-                                            width: 32, height: 32, fontSize: 18,
-                                            backgroundColor: '#dc3545', color: 'white',
-                                            border: 'none', borderRadius: 6, cursor: 'pointer'
-                                        }}
-                                    >
-                                        -
-                                    </button>
-                                    <span style={{ color: '#f0f0f0', fontWeight: 'bold', minWidth: 30, textAlign: 'center' }}>
-                                        {totalScores[team]}
-                                    </span>
-                                    <button
-                                        onClick={() => handleAdjustScore(team, 1)}
-                                        style={{
-                                            width: 32, height: 32, fontSize: 18,
-                                            backgroundColor: '#28a745', color: 'white',
-                                            border: 'none', borderRadius: 6, cursor: 'pointer'
-                                        }}
-                                    >
-                                        +
-                                    </button>
-                                </div>
+                            <div key={team} className="panel-row">
+                                <span>{team}</span>
+                                <span style={{ fontWeight: 'bold' }}>
+                                    {activeGame.scores[team][activeGame.currentRound - 1]} pts
+                                </span>
                             </div>
                         ))}
                     </div>
-                )}
 
-                {isHost && (
-                    <button
-                        onClick={handleNextRound}
-                        style={{
-                            marginTop: 30, padding: '15px 40px', fontSize: 18,
-                            backgroundColor: isLastRound ? '#ffc107' : '#007bff',
-                            color: isLastRound ? '#333' : 'white',
-                            border: 'none', borderRadius: 8, cursor: 'pointer'
-                        }}
-                    >
-                        {isLastRound ? 'See Final Results' : `Start Round ${activeGame.currentRound + 1}`}
-                    </button>
-                )}
-                {!isHost && (
-                    <p style={{ marginTop: 30, color: '#999' }}>Waiting for host to continue...</p>
-                )}
+                    <Scoreboard showRoundBreakdown />
+                    {isHost && <ScoreAdjust />}
+                    {isHost ? (
+                        <button className={isLastRound ? "btn-primary" : "btn-success"} onClick={handleNextRound}>
+                            {isLastRound ? 'See Final Results' : `Start Round ${activeGame.currentRound + 1}`}
+                        </button>
+                    ) : (
+                        <p className="muted">Waiting for host to continue...</p>
+                    )}
+                </div>
             </div>
         );
     }
 
     // ─── GAME OVER ───
     if (gamePhase === "game-over") {
-        // Determine winner
         const sortedTeams = [...activeGame.teamOrder].sort(
             (a, b) => totalScores[b] - totalScores[a]
         );
@@ -480,42 +336,36 @@ function GamePlayScreen({
         const isTie = totalScores[sortedTeams[0]] === totalScores[sortedTeams[1]];
 
         return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <PlayerHeader />
-                <h1>Game Over!</h1>
-                {isTie ? (
-                    <h2>It's a tie!</h2>
-                ) : (
-                    <h2>{winner} Wins!</h2>
-                )}
+            <div className="page">
+                <div className="card card-wide card-center">
+                    <PlayerHeader />
+                    <h1 className="title">Game Over!</h1>
+                    {isTie ? (
+                        <h2 style={{ margin: 0 }}>It's a tie!</h2>
+                    ) : (
+                        <h2 style={{ margin: 0 }}>{winner} Wins!</h2>
+                    )}
 
-                <div style={{ marginTop: 20 }}>
-                    <h3>Final Scores</h3>
                     {sortedTeams.map((team, i) => {
                         const hostAdj = activeGame.hostAdjustments?.[team] || 0;
+                        const isWinner = i === 0 && !isTie;
                         return (
-                            <div key={team} style={{
-                                padding: '12px 20px', margin: '8px auto',
-                                maxWidth: 400, textAlign: 'left',
-                                background: i === 0 && !isTie ? '#3d3000' : '#2c2c2c',
-                                color: '#f0f0f0',
-                                borderRadius: 8, border: i === 0 && !isTie ? '2px solid #ffc107' : '1px solid #444'
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                                    <span style={{ fontWeight: 'bold', fontSize: 16 }}>{team}</span>
-                                    <span style={{ fontWeight: 'bold', fontSize: 16 }}>{totalScores[team]}</span>
+                            <div key={team} className={`panel ${isWinner ? 'winner-card' : ''}`}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                                    <span style={{ fontWeight: 'bold', fontSize: '1.1em' }}>{team}</span>
+                                    <span style={{ fontWeight: 'bold', fontSize: '1.1em' }}>{totalScores[team]}</span>
                                 </div>
-                                <div style={{ fontSize: 13, color: '#aaa', paddingLeft: 8 }}>
+                                <div style={{ fontSize: '0.8em' }} className="muted">
                                     {activeGame.scores[team].map((roundScore, ri) => {
                                         const roundTurns = turnHistory.filter(t => t.team === team && t.round === ri + 1);
                                         return (
                                             <div key={ri} style={{ marginBottom: 4 }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ccc' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
                                                     <span>R{ri + 1}: {activeGame.rounds[ri].name}</span>
                                                     <span>{roundScore} pts</span>
                                                 </div>
                                                 {roundTurns.map((turn, ti) => (
-                                                    <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0 1px 12px', color: '#888', fontSize: 12 }}>
+                                                    <div key={ti} style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: 12, fontSize: '0.85em', opacity: 0.7 }}>
                                                         <span>Turn {ti + 1}</span>
                                                         <span>
                                                             +{turn.wordsGuessed}w
@@ -527,7 +377,7 @@ function GamePlayScreen({
                                         );
                                     })}
                                     {hostAdj !== 0 && (
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#f0ad4e' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', color: '#ffc107' }}>
                                             <span>Host adjustment</span>
                                             <span>{hostAdj > 0 ? '+' : ''}{hostAdj}</span>
                                         </div>
@@ -536,32 +386,24 @@ function GamePlayScreen({
                             </div>
                         );
                     })}
-                </div>
 
-                {isHost && (
-                    <button
-                        onClick={handlePlayAgain}
-                        style={{
-                            marginTop: 30, padding: '15px 40px', fontSize: 18,
-                            backgroundColor: '#28a745', color: 'white',
-                            border: 'none', borderRadius: 8, cursor: 'pointer'
-                        }}
-                    >
-                        Play Again
-                    </button>
-                )}
-                {!isHost && (
-                    <p style={{ marginTop: 30, color: '#999' }}>Waiting for host...</p>
-                )}
+                    {isHost ? (
+                        <button className="btn-success" onClick={handlePlayAgain}>Play Again</button>
+                    ) : (
+                        <p className="muted">Waiting for host...</p>
+                    )}
+                </div>
             </div>
         );
     }
 
     // Fallback
     return (
-        <div style={{ padding: 40 }}>
-            <h1>Unknown game phase: {gamePhase}</h1>
-            <pre>{JSON.stringify(gameState, null, 2)}</pre>
+        <div className="page">
+            <div className="card">
+                <h1 className="title title-sm">Unknown phase: {gamePhase}</h1>
+                <pre style={{ fontSize: '0.7em', overflow: 'auto' }}>{JSON.stringify(gameState, null, 2)}</pre>
+            </div>
         </div>
     );
 }
