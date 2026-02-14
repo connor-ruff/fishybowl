@@ -43,7 +43,7 @@ sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3001
 
 echo "==> Starting/restarting with pm2..."
 pm2 delete fishybowl 2>/dev/null || true
-PORT=3001 pm2 start server/index.js --name fishybowl --env production
+NODE_ENV=production PORT=3001 pm2 start server/index.js --name fishybowl
 
 echo "==> Done! App running on port 80 (forwarded to 3001)"
 PUBLIC_IP=$(curl -4 -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
