@@ -7,9 +7,12 @@ set -euo pipefail
 #   1. Create a Lightsail instance ($5/mo, Amazon Linux 2 or Ubuntu)
 #   2. Open port 80 in Lightsail Networking tab
 #   3. SSH in and install Node.js 18+:
-#        curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-#        sudo yum install -y nodejs        # Amazon Linux
-#        # or: sudo apt-get install -y nodejs   # Ubuntu
+#        # Amazon Linux:
+#          curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+#          sudo yum install -y nodejs
+#        # Ubuntu:
+#          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo bash -
+#          sudo apt-get install -y nodejs
 #   4. Install pm2:
 #        sudo npm install -g pm2
 #   5. Clone the repo:
