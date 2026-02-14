@@ -42,5 +42,5 @@ pm2 delete fishybowl 2>/dev/null || true
 PORT=80 pm2 start server/index.js --name fishybowl --env production
 
 echo "==> Done! App running on port 80"
-PUBLIC_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
+PUBLIC_IP=$(curl -4 -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
 echo "    Visit http://${PUBLIC_IP:-<your-lightsail-ip>}"
