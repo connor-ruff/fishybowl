@@ -37,10 +37,14 @@ cd server && npm ci --omit=dev && cd ..
 echo "==> Installing client dependencies & building..."
 cd client && npm ci && npm run build && cd ..
 
+echo "==> Setting up port forwarding (80 -> 3001)..."
+sudo iptables -t nat -D PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3001 2>/dev/null || true
+sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3001
+
 echo "==> Starting/restarting with pm2..."
 pm2 delete fishybowl 2>/dev/null || true
-PORT=80 pm2 start server/index.js --name fishybowl --env production
+PORT=3001 pm2 start server/index.js --name fishybowl --env production
 
-echo "==> Done! App running on port 80"
+echo "==> Done! App running on port 80 (forwarded to 3001)"
 PUBLIC_IP=$(curl -4 -s --max-time 5 https://icanhazip.com 2>/dev/null || echo "")
 echo "    Visit http://${PUBLIC_IP:-<your-lightsail-ip>}"
