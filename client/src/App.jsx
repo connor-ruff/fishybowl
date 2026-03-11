@@ -204,6 +204,10 @@ function App() {
       return (
         <div className="page">
           <div className="card card-center">
+            <div className="player-header">
+              <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
+              <span>{gameState.clientState.playerName}</span>
+            </div>
             <h1 className="title title-sm">Words Submitted!</h1>
             <p className="muted">Waiting for other players to finish...</p>
           </div>

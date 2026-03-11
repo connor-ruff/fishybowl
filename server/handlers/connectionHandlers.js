@@ -26,19 +26,24 @@ function registerConnectionHandlers(io, socket, rooms) {
                 break;
             }
 
-            // Only pause if the disconnected player is the current clue giver
-            // during phases where they need to be active
-            if (GAMEPLAY_PHASES.includes(room.gamePhase) && room.activeGame) {
-                const isClueGiver = player.name === room.activeGame.currentClueGiver;
-                const needsClueGiver = ["turn-ready", "turn-active"].includes(room.gamePhase);
+            // Decide whether to pause based on current phase
+            if (room.activeGame) {
+                const phase = room.gamePhase;
 
-                if (isClueGiver && needsClueGiver) {
+                // At round boundaries: pause if anyone disconnects
+                if (phase === "round-start") {
+                    room.pausedGamePhase = phase;
+                    room.gamePhase = "paused";
+                    console.log(`Game paused in room ${roomCode} — ${player.name} disconnected at round start`);
+                }
+                // Mid-round: only pause if the clue giver disconnects
+                else if (["turn-ready", "turn-active"].includes(phase) && player.name === room.activeGame.currentClueGiver) {
                     clearTurnTimer(roomCode);
-                    room.pausedGamePhase = room.gamePhase;
+                    room.pausedGamePhase = phase;
                     room.gamePhase = "paused";
                     console.log(`Game paused in room ${roomCode} — clue giver ${player.name} disconnected`);
                 }
-                // Otherwise, game continues — just broadcast the updated connected status
+                // Other phases (turn-end, round-end, etc.): game continues
             }
 
             // Host reassignment if disconnected player was host

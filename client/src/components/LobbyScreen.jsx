@@ -11,8 +11,10 @@ function LobbyScreen({
   return (
     <div className="page">
       <div className="card card-center">
-        <h1 className="title title-sm">Room: {gameState.clientState.roomCode}</h1>
-        <p className="subtitle">Playing as {gameState.clientState.playerName}</p>
+        <div className="player-header">
+          <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
+          <span>{gameState.clientState.playerName}</span>
+        </div>
 
         <ul className="player-list">
           {gameState.serverState.players.map((p) => (

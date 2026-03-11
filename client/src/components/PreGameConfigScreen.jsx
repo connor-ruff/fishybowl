@@ -60,6 +60,10 @@ function PreGameConfigsScreen({
     return (
       <div className="page">
         <div className="card card-center">
+          <div className="player-header">
+            <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
+            <span>{gameState.clientState.playerName}</span>
+          </div>
           <h1 className="title title-sm">Game Setup</h1>
           <p className="muted">Waiting for host to configure the game...</p>
         </div>
@@ -70,6 +74,10 @@ function PreGameConfigsScreen({
   return (
     <div className="page">
       <div className="card card-wide">
+        <div className="player-header">
+          <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
+          <span>{gameState.clientState.playerName}</span>
+        </div>
         <h1 className="title title-sm">Configure Game</h1>
 
         {/* Number of Teams */}

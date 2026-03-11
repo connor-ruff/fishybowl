@@ -12,7 +12,17 @@ function broadcastState(io, roomCode, rooms) {
     io.to(roomCode).emit("game-state-update", rooms[roomCode]);
 }
 
-// If the current clue giver is disconnected, pause before their turn starts
+// Pause if ANY player is disconnected (used at round boundaries)
+function pauseIfAnyDisconnected(room, roomCode) {
+    const disconnected = room.players.filter(p => !p.connected);
+    if (disconnected.length > 0) {
+        room.pausedGamePhase = room.gamePhase;
+        room.gamePhase = "paused";
+        console.log(`Game paused in room ${roomCode} — waiting for disconnected players: ${disconnected.map(p => p.name).join(', ')}`);
+    }
+}
+
+// Pause only if the current clue giver is disconnected (used mid-round)
 function pauseIfClueGiverDisconnected(room, roomCode) {
     const clueGiverName = room.activeGame.currentClueGiver;
     const clueGiverPlayer = room.players.find(p => p.name === clueGiverName);
@@ -236,7 +246,7 @@ function registerGameHandlers(io, socket, rooms) {
         game.wordsGuessedThisTurn = [];
 
         room.gamePhase = "round-start";
-        pauseIfClueGiverDisconnected(room, roomCode);
+        pauseIfAnyDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
     });

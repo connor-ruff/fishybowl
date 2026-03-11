@@ -35,6 +35,10 @@ function CollectWordsScreen({
     return (
         <div className="page">
             <div className="card">
+                <div className="player-header">
+                    <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
+                    <span>{gameState.clientState.playerName}</span>
+                </div>
                 <h1 className="title title-sm">Your Words</h1>
                 <p className="subtitle">Enter {wordsPerPlayer} words or phrases</p>
 
