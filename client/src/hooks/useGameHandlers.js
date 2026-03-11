@@ -147,6 +147,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
         });
     }, [socket, gameState.clientState.roomCode, setGameState, setError]);
 
+    const handleResumeGame = useCallback(() => emitGameAction("resume-game"), [emitGameAction]);
     const handleStartRound = useCallback(() => emitGameAction("start-round"), [emitGameAction]);
     const handleStartTurn = useCallback(() => emitGameAction("start-turn"), [emitGameAction]);
     const handleWordGuessed = useCallback(() => emitGameAction("word-guessed"), [emitGameAction]);
@@ -205,7 +206,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
 
   return {
     handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords,
-    handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
+    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
     handleNextTurn, handleNextRound, handlePlayAgain, handleAdjustScore,
     handleRetryRejoin, handleReturnToStart
   };

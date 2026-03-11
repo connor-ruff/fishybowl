@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 
 function GamePlayScreen({
     gameState, setGameState, error, setError, socket,
-    handleStartRound, handleStartTurn, handleWordGuessed,
+    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed,
     handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
     handleAdjustScore
 }) {
@@ -127,12 +127,32 @@ function GamePlayScreen({
                 <div className="card card-center">
                     <PlayerHeader />
                     <h1 className="title title-sm">Game Paused</h1>
-                    <p>
-                        Waiting for {disconnectedPlayers.map(p => p.name).join(', ')} to reconnect...
-                    </p>
-                    <p className="muted">
-                        They can rejoin with room code <strong>{gameState.clientState.roomCode}</strong>
-                    </p>
+
+                    {disconnectedPlayers.length > 0 ? (
+                        <>
+                            <p className="muted">The following player{disconnectedPlayers.length > 1 ? 's are' : ' is'} disconnected:</p>
+                            <ul className="player-list">
+                                {disconnectedPlayers.map(p => (
+                                    <li key={p.name} style={{ opacity: 0.6 }}>
+                                        <span>{p.name}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                            <p className="muted">
+                                They can rejoin with room code <strong>{gameState.clientState.roomCode}</strong>
+                            </p>
+                        </>
+                    ) : (
+                        <p className="muted">All players are connected.</p>
+                    )}
+
+                    {isHost ? (
+                        <button className="btn-primary" onClick={handleResumeGame} style={{ marginTop: '1rem' }}>
+                            Resume Game
+                        </button>
+                    ) : (
+                        <p className="muted">Waiting for host to resume...</p>
+                    )}
                 </div>
             </div>
         );

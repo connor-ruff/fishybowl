@@ -143,7 +143,7 @@ function App() {
   const {
     handleCreateRoom, handleJoinRoom, handleStartGame,
     handleSubmitGameConfig, handleSubmitWords,
-    handleStartRound, handleStartTurn, handleWordGuessed,
+    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed,
     handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
     handleAdjustScore, handleRetryRejoin, handleReturnToStart
   } = useGameHandlers(socket, gameState, setGameState, setError);
@@ -237,6 +237,7 @@ function App() {
             error={error}
             setError={setError}
             socket={socket}
+            handleResumeGame={handleResumeGame}
             handleStartRound={handleStartRound}
             handleStartTurn={handleStartTurn}
             handleWordGuessed={handleWordGuessed}

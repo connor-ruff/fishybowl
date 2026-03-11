@@ -12,7 +12,37 @@ function broadcastState(io, roomCode, rooms) {
     io.to(roomCode).emit("game-state-update", rooms[roomCode]);
 }
 
+// If the current clue giver is disconnected, pause before their turn starts
+function pauseIfClueGiverDisconnected(room, roomCode) {
+    const clueGiverName = room.activeGame.currentClueGiver;
+    const clueGiverPlayer = room.players.find(p => p.name === clueGiverName);
+    if (clueGiverPlayer && !clueGiverPlayer.connected) {
+        room.pausedGamePhase = room.gamePhase;
+        room.gamePhase = "paused";
+        console.log(`Game paused in room ${roomCode} — clue giver ${clueGiverName} is disconnected`);
+    }
+}
+
 function registerGameHandlers(io, socket, rooms) {
+
+    // Host resumes the game from paused state
+    socket.on("resume-game", (roomCode, callback) => {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+        if (room.gamePhase !== "paused") return callback({ success: false, error: "Game is not paused" });
+        if (room.hostId !== socket.id) return callback({ success: false, error: "Only the host can resume" });
+
+        room.gamePhase = room.pausedGamePhase;
+        delete room.pausedGamePhase;
+        console.log(`Game resumed by host in room ${roomCode} (phase: ${room.gamePhase})`);
+
+        if (room.gamePhase === "turn-active") {
+            startTurnTimer(io, roomCode, rooms);
+        }
+
+        broadcastState(io, roomCode, rooms);
+        callback({ success: true, gameState: room });
+    });
 
     // Host clicks "Start Round" from round-start screen
     socket.on("start-round", (roomCode, callback) => {
@@ -20,6 +50,7 @@ function registerGameHandlers(io, socket, rooms) {
         if (!room) return callback({ success: false, error: "Room not found" });
 
         room.gamePhase = "turn-ready";
+        pauseIfClueGiverDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
     });
@@ -165,6 +196,7 @@ function registerGameHandlers(io, socket, rooms) {
         game.wordsGuessedThisTurn = [];
 
         room.gamePhase = "turn-ready";
+        pauseIfClueGiverDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
     });
@@ -204,6 +236,7 @@ function registerGameHandlers(io, socket, rooms) {
         game.wordsGuessedThisTurn = [];
 
         room.gamePhase = "round-start";
+        pauseIfClueGiverDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
     });

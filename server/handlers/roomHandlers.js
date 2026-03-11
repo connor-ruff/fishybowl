@@ -56,18 +56,7 @@ function registerRoomHandlers(io, socket, rooms) {
                 if (sessionId) room.hostSessionId = sessionId;
             }
 
-            // Check if all players are now connected — unpause if needed
-            const allConnected = room.players.every(p => p.connected);
-            if (allConnected && room.gamePhase === "paused") {
-                room.gamePhase = room.pausedGamePhase;
-                delete room.pausedGamePhase;
-                console.log(`Game resumed in room ${roomCode} (phase: ${room.gamePhase})`);
-
-                if (room.gamePhase === "turn-active") {
-                    startTurnTimer(io, roomCode, rooms);
-                }
-            }
-
+            // Broadcast updated state so everyone sees the player reconnected
             io.to(roomCode).emit("game-state-update", room);
             callback({
                 success: true, roomCode, gameState: room,

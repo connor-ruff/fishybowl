@@ -1,6 +1,7 @@
 const { clearTurnTimer, scheduleRoomCleanup, cancelRoomCleanup } = require('../utils/roomUtils');
 
-const PAUSABLE_PHASES = [
+// Phases where the game is actively in progress
+const GAMEPLAY_PHASES = [
     "collecting-words", "round-start", "turn-ready",
     "turn-active", "turn-end", "round-end", "game-over"
 ];
@@ -25,12 +26,19 @@ function registerConnectionHandlers(io, socket, rooms) {
                 break;
             }
 
-            // During active gameplay, pause the game
-            if (PAUSABLE_PHASES.includes(room.gamePhase)) {
-                clearTurnTimer(roomCode);
-                room.pausedGamePhase = room.gamePhase;
-                room.gamePhase = "paused";
-                console.log(`Game paused in room ${roomCode} — waiting for ${player.name} to rejoin`);
+            // Only pause if the disconnected player is the current clue giver
+            // during phases where they need to be active
+            if (GAMEPLAY_PHASES.includes(room.gamePhase) && room.activeGame) {
+                const isClueGiver = player.name === room.activeGame.currentClueGiver;
+                const needsClueGiver = ["turn-ready", "turn-active"].includes(room.gamePhase);
+
+                if (isClueGiver && needsClueGiver) {
+                    clearTurnTimer(roomCode);
+                    room.pausedGamePhase = room.gamePhase;
+                    room.gamePhase = "paused";
+                    console.log(`Game paused in room ${roomCode} — clue giver ${player.name} disconnected`);
+                }
+                // Otherwise, game continues — just broadcast the updated connected status
             }
 
             // Host reassignment if disconnected player was host
