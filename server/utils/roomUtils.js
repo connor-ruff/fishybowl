@@ -39,6 +39,10 @@ function clearTurnTimer(roomCode) {
 
 function startTurnTimer(io, roomCode, rooms) {
     clearTurnTimer(roomCode);
+    const r = rooms[roomCode];
+    if (!r || !r.activeGame) return;
+    // Record when the turn timer started so clients can compute countdown locally
+    r.activeGame.turnStartedAt = Date.now();
     turnTimers[roomCode] = setInterval(() => {
         const r = rooms[roomCode];
         if (!r || r.gamePhase !== "turn-active") {
@@ -62,8 +66,6 @@ function startTurnTimer(io, roomCode, rooms) {
             }
             r.gamePhase = "turn-end";
             io.to(roomCode).emit("game-state-update", r);
-        } else {
-            io.to(roomCode).emit("timer-update", r.activeGame.turnTimeLeft);
         }
     }, 1000);
 }
@@ -75,6 +77,7 @@ function scheduleRoomCleanup(roomCode, rooms) {
     cancelRoomCleanup(roomCode);
     cleanupTimers[roomCode] = setTimeout(() => {
         if (rooms[roomCode]) {
+            clearTurnTimer(roomCode);
             console.log(`Room ${roomCode} deleted — all players disconnected for 5 minutes`);
             delete rooms[roomCode];
         }

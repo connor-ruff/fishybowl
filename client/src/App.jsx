@@ -200,7 +200,10 @@ function App() {
         />
       );
 
-    case "collecting-words-waiting-for-others":
+    case "collecting-words-waiting-for-others": {
+      const config = gameState.serverState?.gameConfig;
+      const submitted = config?.numPlayersWithSubmittedWords ?? '?';
+      const total = config?.numPlayers ?? '?';
       return (
         <div className="page">
           <div className="card card-center">
@@ -209,10 +212,11 @@ function App() {
               <span>{gameState.clientState.playerName}</span>
             </div>
             <h1 className="title title-sm">Words Submitted!</h1>
-            <p className="muted">Waiting for other players to finish...</p>
+            <p className="muted">{submitted} of {total} players have submitted their words.</p>
           </div>
         </div>
       );
+    }
 
     case "connection-error":
       return (
@@ -240,7 +244,6 @@ function App() {
             setGameState={setGameState}
             error={error}
             setError={setError}
-            socket={socket}
             handleResumeGame={handleResumeGame}
             handleStartRound={handleStartRound}
             handleStartTurn={handleStartTurn}

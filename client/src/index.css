@@ -468,6 +468,18 @@ body {
   color: rgba(255, 255, 255, 0.45);
 }
 
+/* ========== Round Rule Banner ========== */
+
+.round-rule-banner {
+  padding: 8px 14px;
+  background: rgba(100, 181, 246, 0.1);
+  border: 1px solid rgba(100, 181, 246, 0.2);
+  border-radius: 8px;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+
 /* ========== Score Adjust ========== */
 
 .score-adjust {

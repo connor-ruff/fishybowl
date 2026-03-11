@@ -4,6 +4,7 @@ function registerRoomHandlers(io, socket, rooms) {
 
     // Player creates a room
     socket.on("create-room", (data, callback) => {
+        try {
         // Support both old format (plain string) and new format ({ playerName, sessionId })
         const playerName = typeof data === 'string' ? data : data.playerName;
         const sessionId = typeof data === 'string' ? null : data.sessionId;
@@ -18,11 +19,16 @@ function registerRoomHandlers(io, socket, rooms) {
         socket.join(roomCode);
         console.log(`${playerName} created room ${roomCode}`);
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+        } catch (err) {
+            console.error(`Error in create-room:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
 
     // Player joins a room (or rejoins after disconnect)
     socket.on("join-room", (data, callback) => {
+        try {
         const { roomCode, playerName, sessionId } = data;
         const room = rooms[roomCode];
         if (!room) {
@@ -79,24 +85,40 @@ function registerRoomHandlers(io, socket, rooms) {
         io.to(roomCode).emit("update-players", rooms[roomCode]);
 
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+        } catch (err) {
+            console.error(`Error in join-room:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
 
 
     // Host starts the game
     socket.on("start-game", (roomCode, callback) => {
+        try {
         console.log(`Game started in room ${roomCode}`);
         if (rooms[roomCode]) {
             rooms[roomCode].gamePhase = "pre-game-configs";
         }
         io.to(roomCode).emit("game-started", rooms[roomCode]);
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+        } catch (err) {
+            console.error(`Error in start-game:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Host submits game configuration
     socket.on("submit-game-config", (roomCode, config, callback) => {
-
+        try {
         console.log(`Received game configuration for room ${roomCode}:\n`, config);
+
+        // Validate every team has at least 1 player
+        for (const team of config.teams) {
+            if (!team.players || team.players.length === 0) {
+                return callback({ success: false, error: `Team "${team.name}" has no players assigned` });
+            }
+        }
 
         rooms[roomCode].gameConfig = config;
         rooms[roomCode].playerLookup = {};
@@ -149,11 +171,15 @@ function registerRoomHandlers(io, socket, rooms) {
 
         io.to(roomCode).emit("game-started", rooms[roomCode]);
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+        } catch (err) {
+            console.error(`Error in submit-game-config:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Player submits their words
     socket.on("submit-words", (roomCode, playerName, words, callback) => {
-
+        try {
         console.log(`Received words from ${playerName} in room ${roomCode}:`, words);
 
         // Add words to word list
@@ -188,6 +214,9 @@ function registerRoomHandlers(io, socket, rooms) {
             console.log(`Updated playerLookup for room ${roomCode}:\n`, rooms[roomCode].playerLookup);
         };
         callback({ success: true, roomCode, gameState: rooms[roomCode] });
+
+        // Broadcast so waiting players see updated submission count
+        io.to(roomCode).emit("game-state-update", rooms[roomCode]);
 
         // Check if all connected players have submitted words
         const allConnectedSubmitted = Object.keys(rooms[roomCode].playerLookup).every(pname => {
@@ -242,6 +271,10 @@ function registerRoomHandlers(io, socket, rooms) {
 
             room.gamePhase = "round-start";
             io.to(roomCode).emit("all-words-submitted", rooms[roomCode]);
+        }
+        } catch (err) {
+            console.error(`Error in submit-words:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
         }
     });
 

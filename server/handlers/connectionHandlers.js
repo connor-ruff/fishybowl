@@ -9,6 +9,7 @@ const GAMEPLAY_PHASES = [
 function registerConnectionHandlers(io, socket, rooms) {
 
     socket.on("disconnect", () => {
+        try {
         console.log("Client disconnected:", socket.id);
         for (const roomCode in rooms) {
             const room = rooms[roomCode];
@@ -39,6 +40,8 @@ function registerConnectionHandlers(io, socket, rooms) {
                 // Mid-round: only pause if the clue giver disconnects
                 else if (["turn-ready", "turn-active"].includes(phase) && player.name === room.activeGame.currentClueGiver) {
                     clearTurnTimer(roomCode);
+                    // Clear turnStartedAt so the paused state shows the frozen turnTimeLeft
+                    delete room.activeGame.turnStartedAt;
                     room.pausedGamePhase = phase;
                     room.gamePhase = "paused";
                     console.log(`Game paused in room ${roomCode} — clue giver ${player.name} disconnected`);
@@ -63,6 +66,9 @@ function registerConnectionHandlers(io, socket, rooms) {
             // Broadcast updated state to remaining players
             io.to(roomCode).emit("game-state-update", room);
             break;
+        }
+        } catch (err) {
+            console.error(`Error in disconnect handler:`, err);
         }
     });
 }

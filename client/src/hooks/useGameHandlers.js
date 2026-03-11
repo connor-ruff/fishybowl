@@ -67,6 +67,8 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
 
         if (!gameState.clientState.playerIsHost) return alert("Only the host can start the game");
 
+        if (!window.confirm("Start the game? No new players will be able to join after this.")) return;
+
         socket.emit("start-game", gameState.clientState.roomCode, (res) => {
             if (res.success) {
                 setGameState(prev => ({

@@ -37,6 +37,7 @@ function registerGameHandlers(io, socket, rooms) {
 
     // Host resumes the game from paused state
     socket.on("resume-game", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
         if (room.gamePhase !== "paused") return callback({ success: false, error: "Game is not paused" });
@@ -51,11 +52,17 @@ function registerGameHandlers(io, socket, rooms) {
         }
 
         broadcastState(io, roomCode, rooms);
+
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in resume-game:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Host clicks "Start Round" from round-start screen
     socket.on("start-round", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -63,10 +70,15 @@ function registerGameHandlers(io, socket, rooms) {
         pauseIfClueGiverDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in start-round:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Clue giver clicks "Start" on turn-ready screen
     socket.on("start-turn", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -85,14 +97,19 @@ function registerGameHandlers(io, socket, rooms) {
         game.carriedTimeLeft = null;
         room.gamePhase = "turn-active";
 
-        broadcastState(io, roomCode, rooms);
         startTurnTimer(io, roomCode, rooms);
+        broadcastState(io, roomCode, rooms);
 
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in start-turn:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Clue giver presses "Got It!"
     socket.on("word-guessed", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -140,10 +157,15 @@ function registerGameHandlers(io, socket, rooms) {
         game.currentWord = game.wordsRemaining.pop();
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in word-guessed:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Clue giver presses "Skip"
     socket.on("skip-word", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -171,10 +193,15 @@ function registerGameHandlers(io, socket, rooms) {
 
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in skip-word:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Host adjusts a team's total score (tracked separately from round scores)
     socket.on("adjust-score", (roomCode, teamName, delta, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -184,10 +211,15 @@ function registerGameHandlers(io, socket, rooms) {
 
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in adjust-score:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Advance to next turn after turn-end
     socket.on("next-turn", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -209,10 +241,15 @@ function registerGameHandlers(io, socket, rooms) {
         pauseIfClueGiverDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in next-turn:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Start next round after round-end
     socket.on("next-round", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -249,10 +286,15 @@ function registerGameHandlers(io, socket, rooms) {
         pauseIfAnyDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in next-round:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 
     // Play again — reset to lobby
     socket.on("play-again", (roomCode, callback) => {
+        try {
         const room = rooms[roomCode];
         if (!room) return callback({ success: false, error: "Room not found" });
 
@@ -267,6 +309,10 @@ function registerGameHandlers(io, socket, rooms) {
 
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
+        } catch (err) {
+            console.error(`Error in play-again:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
     });
 }
 
