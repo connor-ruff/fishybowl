@@ -68,11 +68,34 @@ function startTurnTimer(io, roomCode, rooms) {
     }, 1000);
 }
 
+// ─── Room cleanup timers (delete room when all players disconnect) ───
+const cleanupTimers = {};
+
+function scheduleRoomCleanup(roomCode, rooms) {
+    cancelRoomCleanup(roomCode);
+    cleanupTimers[roomCode] = setTimeout(() => {
+        if (rooms[roomCode]) {
+            console.log(`Room ${roomCode} deleted — all players disconnected for 5 minutes`);
+            delete rooms[roomCode];
+        }
+        delete cleanupTimers[roomCode];
+    }, 5 * 60 * 1000);
+}
+
+function cancelRoomCleanup(roomCode) {
+    if (cleanupTimers[roomCode]) {
+        clearTimeout(cleanupTimers[roomCode]);
+        delete cleanupTimers[roomCode];
+    }
+}
+
 module.exports = {
     generateRoomCode,
     getPlayerObjects,
     shuffleArray,
     getWordArray,
     clearTurnTimer,
-    startTurnTimer
+    startTurnTimer,
+    scheduleRoomCleanup,
+    cancelRoomCleanup
 };

@@ -1,4 +1,4 @@
-const { getPlayerObjects, clearTurnTimer } = require('../utils/roomUtils');
+const { clearTurnTimer, scheduleRoomCleanup, cancelRoomCleanup } = require('../utils/roomUtils');
 
 const PAUSABLE_PHASES = [
     "collecting-words", "round-start", "turn-ready",
@@ -11,42 +11,44 @@ function registerConnectionHandlers(io, socket, rooms) {
         console.log("Client disconnected:", socket.id);
         for (const roomCode in rooms) {
             const room = rooms[roomCode];
-            const index = room.players.findIndex(p => p.id === socket.id);
-            if (index === -1) continue;
+            const player = room.players.find(p => p.id === socket.id);
+            if (!player) continue;
 
-            const player = room.players[index];
+            player.connected = false;
             console.log(`${player.name} disconnected from room ${roomCode} (phase: ${room.gamePhase})`);
 
-            // During active gameplay, pause instead of removing
-            if (PAUSABLE_PHASES.includes(room.gamePhase)) {
-                player.connected = false;
-
-                // Freeze the timer if a turn was active
-                clearTurnTimer(roomCode);
-
-                // Save the phase we were in and pause
-                room.pausedGamePhase = room.gamePhase;
-                room.gamePhase = "paused";
-
-                console.log(`Game paused in room ${roomCode} — waiting for ${player.name} to rejoin`);
-                io.to(roomCode).emit("game-state-update", room);
+            // If ALL players are now disconnected, schedule room cleanup
+            const anyConnected = room.players.some(p => p.connected);
+            if (!anyConnected) {
+                console.log(`All players disconnected from room ${roomCode} — scheduling cleanup`);
+                scheduleRoomCleanup(roomCode, rooms);
                 break;
             }
 
-            // Pre-game phases: remove player as before
-            room.players.splice(index, 1);
-            io.to(roomCode).emit("update-players", getPlayerObjects(roomCode, rooms));
-
-            // If host left, assign new host
-            if (room.hostId === socket.id && room.players.length > 0) {
-                room.hostId = room.players[0].id;
-                room.players[0].is_host = true;
-                console.log(`New host for room ${roomCode}: ${room.players[0].name}`);
+            // During active gameplay, pause the game
+            if (PAUSABLE_PHASES.includes(room.gamePhase)) {
+                clearTurnTimer(roomCode);
+                room.pausedGamePhase = room.gamePhase;
+                room.gamePhase = "paused";
+                console.log(`Game paused in room ${roomCode} — waiting for ${player.name} to rejoin`);
             }
 
-            // If no players left, delete room
-            if (room.players.length === 0) delete rooms[roomCode];
+            // Host reassignment if disconnected player was host
+            if (player.is_host) {
+                const newHost = room.players.find(p => p.connected);
+                if (newHost) {
+                    player.is_host = false;
+                    newHost.is_host = true;
+                    room.hostId = newHost.id;
+                    if (room.hostSessionId) {
+                        room.hostSessionId = newHost.sessionId;
+                    }
+                    console.log(`New host for room ${roomCode}: ${newHost.name}`);
+                }
+            }
 
+            // Broadcast updated state to remaining players
+            io.to(roomCode).emit("game-state-update", room);
             break;
         }
     });

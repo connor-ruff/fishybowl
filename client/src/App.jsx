@@ -6,10 +6,31 @@ import PreGameConfigsScreen from "./components/PreGameConfigScreen";
 import CollectWordsScreen from "./components/CollectWordsScreen";
 import GamePlayScreen from "./components/GamePlayScreen";
 import { useGameHandlers } from './hooks/useGameHandlers';
+import { SESSION_ID } from './utils/session';
 
 const socket = io();
 
 const GAMEPLAY_PHASES = ["round-start", "turn-ready", "turn-active", "turn-end", "round-end", "game-over", "paused"];
+
+// Derives the display phase from server + client state.
+// The only client-only override is "collecting-words-waiting-for-others".
+function deriveDisplayPhase(serverState, clientState) {
+  if (clientState.clientGamePhase === "start-page") return "start-page";
+  if (clientState.clientGamePhase === "connection-error") return "connection-error";
+  if (!serverState) return clientState.clientGamePhase;
+
+  const serverPhase = serverState.gamePhase;
+
+  // Client-only override: player submitted words but others haven't
+  if (serverPhase === "collecting-words" && clientState.clientGamePhase === "collecting-words-waiting-for-others") {
+    return "collecting-words-waiting-for-others";
+  }
+
+  // For lobby, use client phase since client tracks "lobby" while server uses "in-lobby"
+  if (serverPhase === "in-lobby") return "in-lobby";
+
+  return serverPhase;
+}
 
 function App() {
 
@@ -28,34 +49,50 @@ function App() {
   const gameStateRef = useRef(gameState);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // Listen for socket events
+  // Consolidated socket event listeners
   useEffect(() => {
-    socket.on("update-players", (serverState) => {
-      setGameState(prev => ({ ...prev, serverState: serverState }));
-    });
+    const handleServerState = (serverState) => {
+      setGameState(prev => {
+        const serverPhase = serverState.gamePhase;
+        let newClientPhase = prev.clientState.clientGamePhase;
 
-    socket.on("game-started", (serverState) => {
-      console.log("Game started! Room data:", serverState);
-      setGameState(prev => ({ ...prev, serverState: serverState, clientState: { ...prev.clientState, clientGamePhase: "collecting-words" } }));
-    });
+        // Sync client phase from server, preserving client-only overrides
+        if (serverPhase === "in-lobby") {
+          newClientPhase = "lobby";
+        } else if (serverPhase === "pre-game-configs") {
+          newClientPhase = "pre-game-configs";
+        } else if (serverPhase === "collecting-words") {
+          // Preserve "collecting-words-waiting-for-others" if already set
+          if (newClientPhase !== "collecting-words-waiting-for-others") {
+            newClientPhase = "collecting-words";
+          }
+        } else {
+          // For all other phases (gameplay, paused, etc.), sync directly
+          newClientPhase = serverPhase;
+        }
 
-    socket.on("all-words-submitted", (serverState) => {
-      console.log("All words submitted! Room data:", serverState);
-      setGameState(prev => ({
-        ...prev,
-        serverState: serverState,
-        clientState: { ...prev.clientState, clientGamePhase: serverState.gamePhase }
-      }));
-    });
+        // Update host status if current player's host status changed
+        const playerName = prev.clientState.playerName;
+        let playerIsHost = prev.clientState.playerIsHost;
+        if (playerName && serverState.players) {
+          const me = serverState.players.find(p => p.name === playerName);
+          if (me) {
+            playerIsHost = me.is_host;
+          }
+        }
 
-    // Gameplay state updates (broadcast by server during active game)
-    socket.on("game-state-update", (serverState) => {
-      setGameState(prev => ({
-        ...prev,
-        serverState: serverState,
-        clientState: { ...prev.clientState, clientGamePhase: serverState.gamePhase }
-      }));
-    });
+        return {
+          ...prev,
+          serverState,
+          clientState: { ...prev.clientState, clientGamePhase: newClientPhase, playerIsHost }
+        };
+      });
+    };
+
+    socket.on("update-players", handleServerState);
+    socket.on("game-started", handleServerState);
+    socket.on("all-words-submitted", handleServerState);
+    socket.on("game-state-update", handleServerState);
 
     return () => {
       socket.off("update-players");
@@ -65,7 +102,7 @@ function App() {
     };
   }, []);
 
-  // Auto-rejoin on socket reconnect (handles brief network drops)
+  // Auto-rejoin on socket reconnect
   useEffect(() => {
     let hasConnected = false;
     const handleConnect = () => {
@@ -77,7 +114,7 @@ function App() {
       const { roomCode, playerName } = gs.clientState;
       if (roomCode && playerName && gs.serverState) {
         console.log("Socket reconnected — attempting auto-rejoin...");
-        socket.emit("join-room", { roomCode, playerName }, (res) => {
+        socket.emit("join-room", { roomCode, playerName, sessionId: SESSION_ID }, (res) => {
           if (res.success) {
             setGameState(prev => ({
               ...prev,
@@ -85,9 +122,16 @@ function App() {
               clientState: {
                 ...prev.clientState,
                 playerIsHost: res.isHost || prev.clientState.playerIsHost,
-                clientGamePhase: res.gameState.gamePhase
+                clientGamePhase: res.gameState.gamePhase === "in-lobby" ? "lobby" : res.gameState.gamePhase
               }
             }));
+          } else {
+            // Rejoin failed — show recovery UI
+            setGameState(prev => ({
+              ...prev,
+              clientState: { ...prev.clientState, clientGamePhase: "connection-error" }
+            }));
+            setError(res.error || "Failed to rejoin the game");
           }
         });
       }
@@ -101,102 +145,123 @@ function App() {
     handleSubmitGameConfig, handleSubmitWords,
     handleStartRound, handleStartTurn, handleWordGuessed,
     handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
-    handleAdjustScore
+    handleAdjustScore, handleRetryRejoin, handleReturnToStart
   } = useGameHandlers(socket, gameState, setGameState, setError);
 
+  const displayPhase = deriveDisplayPhase(gameState.serverState, gameState.clientState);
 
   /////////////////////////////////////////////////
-  // Render different screens based on game phase
+  // Render based on derived display phase
   /////////////////////////////////////////////////
-  if (gameState.clientState.clientGamePhase === "start-page") {
-    return (
-      <StartScreen
-        gameState={gameState}
-        setGameState={setGameState}
-        error={error}
-        setError={setError}
-        handleCreateRoom={handleCreateRoom}
-        handleJoinRoom={handleJoinRoom}
-      />
-    );
-  }
-  else if (gameState.serverState.gamePhase === "in-lobby") {
-    return (
-      <LobbyScreen
-        gameState={gameState}
-        setGameState={setGameState}
-        error={error}
-        setError={setError}
-        handleStartGame={handleStartGame}
-      />
-    );
-  }
+  switch (displayPhase) {
+    case "start-page":
+      return (
+        <StartScreen
+          gameState={gameState}
+          setGameState={setGameState}
+          error={error}
+          setError={setError}
+          handleCreateRoom={handleCreateRoom}
+          handleJoinRoom={handleJoinRoom}
+        />
+      );
 
-  else if (gameState.serverState.gamePhase === "pre-game-configs") {
-    return (
-      <PreGameConfigsScreen
-        gameState={gameState}
-        setGameState={setGameState}
-        error={error}
-        setError={setError}
-        handleSubmitGameConfig={handleSubmitGameConfig}
-      />
-    );
-  }
+    case "lobby":
+    case "in-lobby":
+      return (
+        <LobbyScreen
+          gameState={gameState}
+          setGameState={setGameState}
+          error={error}
+          setError={setError}
+          handleStartGame={handleStartGame}
+        />
+      );
 
-  else if (gameState.serverState.gamePhase === "collecting-words" && gameState.clientState.clientGamePhase !== "collecting-words-waiting-for-others") {
-    return (
-      <CollectWordsScreen
-        gameState={gameState}
-        setGameState={setGameState}
-        error={error}
-        setError={setError}
-        handleSubmitWords={handleSubmitWords}
-      />
-    );
-  }
+    case "pre-game-configs":
+      return (
+        <PreGameConfigsScreen
+          gameState={gameState}
+          setGameState={setGameState}
+          error={error}
+          setError={setError}
+          handleSubmitGameConfig={handleSubmitGameConfig}
+        />
+      );
 
-  else if (gameState.clientState.clientGamePhase === "collecting-words-waiting-for-others") {
-    return (
-      <div className="page">
-        <div className="card card-center">
-          <h1 className="title title-sm">Words Submitted!</h1>
-          <p className="muted">Waiting for other players to finish...</p>
+    case "collecting-words":
+      return (
+        <CollectWordsScreen
+          gameState={gameState}
+          setGameState={setGameState}
+          error={error}
+          setError={setError}
+          handleSubmitWords={handleSubmitWords}
+        />
+      );
+
+    case "collecting-words-waiting-for-others":
+      return (
+        <div className="page">
+          <div className="card card-center">
+            <h1 className="title title-sm">Words Submitted!</h1>
+            <p className="muted">Waiting for other players to finish...</p>
+          </div>
         </div>
-      </div>
-    );
-  }
+      );
 
-  else if (GAMEPLAY_PHASES.includes(gameState.serverState.gamePhase)) {
-    return (
-      <GamePlayScreen
-        gameState={gameState}
-        setGameState={setGameState}
-        error={error}
-        setError={setError}
-        socket={socket}
-        handleStartRound={handleStartRound}
-        handleStartTurn={handleStartTurn}
-        handleWordGuessed={handleWordGuessed}
-        handleSkipWord={handleSkipWord}
-        handleNextTurn={handleNextTurn}
-        handleNextRound={handleNextRound}
-        handlePlayAgain={handlePlayAgain}
-        handleAdjustScore={handleAdjustScore}
-      />
-    );
-  }
-
-  else {
-    return (
-      console.log("Unknown game state:\n", gameState) ||
-      <div className="page">
-        <div className="card">
-          <h1 className="title title-sm">Unknown Game State</h1>
-          <pre style={{ fontSize: '0.7em', overflow: 'auto' }}>{JSON.stringify(gameState, null, 2)}</pre>
+    case "connection-error":
+      return (
+        <div className="page">
+          <div className="card card-center">
+            <h1 className="title title-sm">Connection Lost</h1>
+            <p className="muted">{error || "Lost connection to the game."}</p>
+            <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', justifyContent: 'center' }}>
+              <button className="btn-primary" onClick={handleRetryRejoin}>
+                Retry
+              </button>
+              <button className="btn-secondary" onClick={handleReturnToStart}>
+                Return Home
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-    );
+      );
+
+    default:
+      if (GAMEPLAY_PHASES.includes(displayPhase)) {
+        return (
+          <GamePlayScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            error={error}
+            setError={setError}
+            socket={socket}
+            handleStartRound={handleStartRound}
+            handleStartTurn={handleStartTurn}
+            handleWordGuessed={handleWordGuessed}
+            handleSkipWord={handleSkipWord}
+            handleNextTurn={handleNextTurn}
+            handleNextRound={handleNextRound}
+            handlePlayAgain={handlePlayAgain}
+            handleAdjustScore={handleAdjustScore}
+          />
+        );
+      }
+
+      console.log("Unknown game state:\n", gameState);
+      return (
+        <div className="page">
+          <div className="card card-center">
+            <h1 className="title title-sm">Unknown Game State</h1>
+            <p className="muted">Something went wrong.</p>
+            <pre style={{ fontSize: '0.7em', overflow: 'auto' }}>{JSON.stringify(gameState, null, 2)}</pre>
+            <button className="btn-secondary" onClick={handleReturnToStart} style={{ marginTop: '1rem' }}>
+              Return Home
+            </button>
+          </div>
+        </div>
+      );
   }
 }
 

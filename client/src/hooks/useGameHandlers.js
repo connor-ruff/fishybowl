@@ -1,10 +1,11 @@
 import { useCallback } from "react";
+import { SESSION_ID } from "../utils/session";
 
 export function useGameHandlers(socket, gameState, setGameState, setError) {
   const handleCreateRoom = useCallback(() => {
     if (!gameState.clientState.playerName) return alert("Enter your name first");
-    
-    socket.emit("create-room", gameState.clientState.playerName, (res) => {
+
+    socket.emit("create-room", { playerName: gameState.clientState.playerName, sessionId: SESSION_ID }, (res) => {
       if (res.success) {
         setGameState(prev => ({
           ...prev,
@@ -25,14 +26,14 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
     if (!gameState.clientState.playerName || !roomCodeInput) {
       return alert("Enter name and room code");
     }
-    
+
     socket.emit("join-room", {
       roomCode: roomCodeInput,
-      playerName: gameState.clientState.playerName
+      playerName: gameState.clientState.playerName,
+      sessionId: SESSION_ID
     }, (res) => {
       if (res.success) {
         if (res.isRejoin) {
-          // Rejoin — restore full game state
           setGameState(prev => ({
             ...prev,
             serverState: res.gameState,
@@ -44,7 +45,6 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
             }
           }));
         } else {
-          // Normal join
           setGameState(prev => ({
             ...prev,
             serverState: res.gameState,
@@ -68,7 +68,6 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
         if (!gameState.clientState.playerIsHost) return alert("Only the host can start the game");
 
         socket.emit("start-game", gameState.clientState.roomCode, (res) => {
-            // Do nothing for now; server will emit updates
             if (res.success) {
                 setGameState(prev => ({
                     ...prev,
@@ -85,17 +84,15 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
             }
         });
 
-  
-
     }, [socket, gameState.clientState.roomCode, setGameState, setError]);
 
     const handleSubmitGameConfig = useCallback((config) => {
 
-        if (!gameState.clientState.playerIsHost) { 
+        if (!gameState.clientState.playerIsHost) {
           return alert("Only the host can submit game configuration");
         }
-    
-        
+
+
         socket.emit("submit-game-config", gameState.clientState.roomCode, config, (res) => {
             if (res.success) {
                 setGameState(prev => ({
@@ -103,7 +100,7 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
                     serverState: res.gameState,
                     clientState: {
                         ...prev.clientState,
-                        clientGamePhase: "collecting-words" // Update as needed
+                        clientGamePhase: "collecting-words"
                     }
                 }));
                 setError("");
@@ -170,9 +167,46 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
         });
     }, [socket, gameState.clientState.roomCode, setGameState]);
 
+    const handleRetryRejoin = useCallback(() => {
+        const { roomCode, playerName } = gameState.clientState;
+        if (!roomCode || !playerName) return;
+
+        socket.emit("join-room", { roomCode, playerName, sessionId: SESSION_ID }, (res) => {
+            if (res.success) {
+                setGameState(prev => ({
+                    ...prev,
+                    serverState: res.gameState,
+                    clientState: {
+                        ...prev.clientState,
+                        roomCode: res.roomCode,
+                        playerIsHost: res.isHost || prev.clientState.playerIsHost,
+                        clientGamePhase: res.gameState.gamePhase
+                    }
+                }));
+                setError("");
+            } else {
+                setError(res.error || "Failed to rejoin");
+            }
+        });
+    }, [socket, gameState.clientState, setGameState, setError]);
+
+    const handleReturnToStart = useCallback(() => {
+        setGameState({
+            serverState: null,
+            clientState: {
+                playerName: null,
+                playerIsHost: null,
+                clientGamePhase: "start-page",
+                roomCode: null
+            }
+        });
+        setError("");
+    }, [setGameState, setError]);
+
   return {
     handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords,
     handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
-    handleNextTurn, handleNextRound, handlePlayAgain, handleAdjustScore
+    handleNextTurn, handleNextRound, handlePlayAgain, handleAdjustScore,
+    handleRetryRejoin, handleReturnToStart
   };
 }

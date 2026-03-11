@@ -40,13 +40,15 @@ function PreGameConfigsScreen({
     setTempConfig(prev => ({ ...prev, teams: newTeams }));
   };
 
+  // Only show connected players for team assignment
+  const connectedPlayers = gameState.serverState?.players?.filter(p => p.connected !== false) || [];
+
   const handleSubmitConfig_component = () => {
     console.log("Submitting configuration:\n", tempConfig);
 
     const assignedPlayers = tempConfig.teams.flatMap(team => team.players);
-    const totalPlayers = gameState.serverState?.players?.length || 0;
 
-    if (assignedPlayers.length !== totalPlayers) {
+    if (assignedPlayers.length !== connectedPlayers.length) {
       return alert("Please assign all players to teams");
     }
 
@@ -104,7 +106,7 @@ function PreGameConfigsScreen({
         {/* Team Assignment */}
         <div className="config-section">
           <label>Assign Players</label>
-          {gameState.serverState?.players?.map((player) => {
+          {connectedPlayers.map((player) => {
             const currentTeamIndex = tempConfig.teams.findIndex(team =>
               team.players.includes(player.name)
             );
@@ -140,7 +142,7 @@ function PreGameConfigsScreen({
               style={{ width: 80 }}
             />
             <span className="muted">
-              Total: {tempConfig.wordsPerPlayer * (gameState.serverState?.players?.length || 0)} words
+              Total: {tempConfig.wordsPerPlayer * connectedPlayers.length} words
             </span>
           </div>
         </div>
