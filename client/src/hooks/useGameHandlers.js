@@ -138,11 +138,22 @@ export function useGameHandlers(socket, gameState, setGameState, setError) {
     const emitGameAction = useCallback((event) => {
         socket.emit(event, gameState.clientState.roomCode, (res) => {
             if (res.success) {
-                setGameState(prev => ({
-                    ...prev,
-                    serverState: res.gameState,
-                    clientState: { ...prev.clientState, clientGamePhase: res.gameState.gamePhase }
-                }));
+                setGameState(prev => {
+                    let newPhase = res.gameState.gamePhase;
+                    // If resuming back to collecting-words, check if this player already submitted
+                    if (newPhase === "collecting-words") {
+                        const myName = prev.clientState.playerName;
+                        const alreadySubmitted = myName && res.gameState.playerLookup?.[myName]?.wordsSubmitted;
+                        if (alreadySubmitted) {
+                            newPhase = "collecting-words-waiting-for-others";
+                        }
+                    }
+                    return {
+                        ...prev,
+                        serverState: res.gameState,
+                        clientState: { ...prev.clientState, clientGamePhase: newPhase }
+                    };
+                });
             } else {
                 setError(res.error);
             }
