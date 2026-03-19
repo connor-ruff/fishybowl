@@ -40,8 +40,9 @@ function registerConnectionHandlers(io, socket, rooms) {
                 // Mid-round: only pause if the clue giver disconnects
                 else if (["turn-ready", "turn-active"].includes(phase) && player.name === room.activeGame.currentClueGiver) {
                     clearTurnTimer(roomCode);
-                    // Clear turnStartedAt so the paused state shows the frozen turnTimeLeft
-                    delete room.activeGame.turnStartedAt;
+                    // Freeze turnTimeLeft and clear turnEndsAt so the paused state shows the frozen value
+                    room.activeGame.turnTimeLeft = Math.max(0, Math.ceil((room.activeGame.turnEndsAt - Date.now()) / 1000));
+                    delete room.activeGame.turnEndsAt;
                     room.pausedGamePhase = phase;
                     room.gamePhase = "paused";
                     console.log(`Game paused in room ${roomCode} — clue giver ${player.name} disconnected`);

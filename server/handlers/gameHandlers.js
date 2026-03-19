@@ -143,8 +143,9 @@ function registerGameHandlers(io, socket, rooms) {
             game.currentWord = null;
 
             // For rounds 1-2, carry remaining time so this team continues into the next round
-            if (game.currentRound < 3 && game.turnTimeLeft > 0) {
-                game.carriedTimeLeft = game.turnTimeLeft;
+            const timeLeft = Math.max(0, Math.ceil((game.turnEndsAt - Date.now()) / 1000));
+            if (game.currentRound < 3 && timeLeft > 0) {
+                game.carriedTimeLeft = timeLeft;
             } else {
                 game.carriedTimeLeft = null;
             }

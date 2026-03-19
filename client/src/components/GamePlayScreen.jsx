@@ -94,26 +94,19 @@ function GamePlayScreen({
 
     const [timeLeft, setTimeLeft] = useState(activeGame.turnTimeLeft);
 
-    // Client-side countdown: compute time remaining from server's turnStartedAt + turnTimeLeft
+    // Client-side countdown: compute time remaining from server's turnEndsAt timestamp
     useEffect(() => {
-        if (gamePhase !== "turn-active") {
+        if (gamePhase !== "turn-active" || !activeGame.turnEndsAt) {
             setTimeLeft(activeGame.turnTimeLeft);
             return;
         }
-        // Calculate initial time remaining based on server timestamp
-        const calcTimeLeft = () => {
-            if (activeGame.turnStartedAt) {
-                const elapsed = Math.floor((Date.now() - activeGame.turnStartedAt) / 1000);
-                return Math.max(0, activeGame.turnTimeLeft - elapsed);
-            }
-            return activeGame.turnTimeLeft;
-        };
+        const calcTimeLeft = () => Math.max(0, Math.ceil((activeGame.turnEndsAt - Date.now()) / 1000));
         setTimeLeft(calcTimeLeft());
         const interval = setInterval(() => {
             setTimeLeft(calcTimeLeft());
         }, 200);
         return () => clearInterval(interval);
-    }, [gamePhase, activeGame.turnTimeLeft, activeGame.turnStartedAt]);
+    }, [gamePhase, activeGame.turnEndsAt]);
 
     const totalScores = {};
     activeGame.teamOrder.forEach(team => {

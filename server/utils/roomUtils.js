@@ -41,18 +41,19 @@ function startTurnTimer(io, roomCode, rooms) {
     clearTurnTimer(roomCode);
     const r = rooms[roomCode];
     if (!r || !r.activeGame) return;
-    // Record when the turn timer started so clients can compute countdown locally
-    r.activeGame.turnStartedAt = Date.now();
+    // Record when the turn ends (wall-clock) so clients can compute countdown locally
+    r.activeGame.turnEndsAt = Date.now() + r.activeGame.turnTimeLeft * 1000;
     turnTimers[roomCode] = setInterval(() => {
         const r = rooms[roomCode];
         if (!r || r.gamePhase !== "turn-active") {
             clearTurnTimer(roomCode);
             return;
         }
-        r.activeGame.turnTimeLeft -= 1;
-        if (r.activeGame.turnTimeLeft <= 0) {
+        const remaining = Math.ceil((r.activeGame.turnEndsAt - Date.now()) / 1000);
+        if (remaining <= 0) {
             clearTurnTimer(roomCode);
             const g = r.activeGame;
+            g.turnTimeLeft = 0;
             g.turnHistory.push({
                 round: g.currentRound,
                 team: g.teamOrder[g.currentTeamIndex],
