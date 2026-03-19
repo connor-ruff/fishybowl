@@ -168,6 +168,9 @@ function GamePlayScreen({
                             <p className="muted">
                                 They can rejoin with room code <strong>{gameState.clientState.roomCode}</strong>
                             </p>
+                            <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                                They must use the <strong>same name</strong> they originally joined with.
+                            </p>
                         </>
                     ) : (
                         <p className="muted">All players are connected.</p>
