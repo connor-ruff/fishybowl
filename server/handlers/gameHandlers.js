@@ -156,6 +156,18 @@ function registerGameHandlers(io, socket, rooms) {
         }
 
         game.currentWord = game.wordsRemaining.pop();
+
+        // Check if the new clue giver (after rotation) is disconnected
+        const newClueGiverPlayer = room.players.find(p => p.name === game.currentClueGiver);
+        if (newClueGiverPlayer && !newClueGiverPlayer.connected) {
+            clearTurnTimer(roomCode);
+            game.turnTimeLeft = Math.max(0, Math.ceil((game.turnEndsAt - Date.now()) / 1000));
+            delete game.turnEndsAt;
+            room.pausedGamePhase = room.gamePhase;
+            room.gamePhase = "paused";
+            console.log(`Game paused in room ${roomCode} — new clue giver ${game.currentClueGiver} is disconnected`);
+        }
+
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
         } catch (err) {
@@ -239,7 +251,7 @@ function registerGameHandlers(io, socket, rooms) {
         game.wordsGuessedThisTurn = [];
 
         room.gamePhase = "turn-ready";
-        pauseIfClueGiverDisconnected(room, roomCode);
+        pauseIfAnyDisconnected(room, roomCode);
         broadcastState(io, roomCode, rooms);
         callback({ success: true, gameState: room });
         } catch (err) {
