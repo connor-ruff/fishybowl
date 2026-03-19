@@ -62,8 +62,12 @@ function App() {
         } else if (serverPhase === "pre-game-configs") {
           newClientPhase = "pre-game-configs";
         } else if (serverPhase === "collecting-words") {
-          // Preserve "collecting-words-waiting-for-others" if already set
-          if (newClientPhase !== "collecting-words-waiting-for-others") {
+          // Check if this player already submitted words (handles resume from pause)
+          const myName = prev.clientState.playerName;
+          const alreadySubmitted = myName && serverState.playerLookup?.[myName]?.wordsSubmitted;
+          if (alreadySubmitted || newClientPhase === "collecting-words-waiting-for-others") {
+            newClientPhase = "collecting-words-waiting-for-others";
+          } else {
             newClientPhase = "collecting-words";
           }
         } else {
