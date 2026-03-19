@@ -28,9 +28,16 @@ function registerConnectionHandlers(io, socket, rooms) {
             }
 
             // Decide whether to pause based on current phase
-            if (room.activeGame) {
-                const phase = room.gamePhase;
+            const phase = room.gamePhase;
 
+            // During config phases: pause if anyone disconnects
+            if (["pre-game-configs", "collecting-words"].includes(phase)) {
+                room.pausedGamePhase = phase;
+                room.gamePhase = "paused";
+                console.log(`Game paused in room ${roomCode} — ${player.name} disconnected during ${phase}`);
+            }
+            // During gameplay
+            else if (room.activeGame) {
                 // At round boundaries: pause if anyone disconnects
                 if (phase === "round-start") {
                     room.pausedGamePhase = phase;

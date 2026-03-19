@@ -96,12 +96,18 @@ function registerRoomHandlers(io, socket, rooms) {
     // Host starts the game
     socket.on("start-game", (roomCode, callback) => {
         try {
-        console.log(`Game started in room ${roomCode}`);
-        if (rooms[roomCode]) {
-            rooms[roomCode].gamePhase = "pre-game-configs";
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const disconnected = room.players.filter(p => !p.connected);
+        if (disconnected.length > 0) {
+            return callback({ success: false, error: `Cannot start — ${disconnected.map(p => p.name).join(', ')} disconnected` });
         }
-        io.to(roomCode).emit("game-started", rooms[roomCode]);
-        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+
+        console.log(`Game started in room ${roomCode}`);
+        room.gamePhase = "pre-game-configs";
+        io.to(roomCode).emit("game-started", room);
+        callback({ success: true, roomCode, gameState: room });
         } catch (err) {
             console.error(`Error in start-game:`, err);
             if (callback) callback({ success: false, error: "Server error" });
@@ -111,6 +117,14 @@ function registerRoomHandlers(io, socket, rooms) {
     // Host submits game configuration
     socket.on("submit-game-config", (roomCode, config, callback) => {
         try {
+        const room = rooms[roomCode];
+        if (!room) return callback({ success: false, error: "Room not found" });
+
+        const disconnected = room.players.filter(p => !p.connected);
+        if (disconnected.length > 0) {
+            return callback({ success: false, error: `Cannot proceed — ${disconnected.map(p => p.name).join(', ')} disconnected` });
+        }
+
         console.log(`Received game configuration for room ${roomCode}:\n`, config);
 
         // Validate every team has at least 1 player
@@ -218,15 +232,13 @@ function registerRoomHandlers(io, socket, rooms) {
         // Broadcast so waiting players see updated submission count
         io.to(roomCode).emit("game-state-update", rooms[roomCode]);
 
-        // Check if all connected players have submitted words
-        const allConnectedSubmitted = Object.keys(rooms[roomCode].playerLookup).every(pname => {
-            const pInfo = rooms[roomCode].playerLookup[pname];
-            const playerObj = rooms[roomCode].players.find(p => p.name === pname);
-            const isConnected = playerObj ? playerObj.connected : true;
-            return pInfo.wordsSubmitted || !isConnected;
+        // Check if all players have submitted words AND are connected
+        const allSubmitted = Object.keys(rooms[roomCode].playerLookup).every(pname => {
+            return rooms[roomCode].playerLookup[pname].wordsSubmitted;
         });
+        const allConnected = rooms[roomCode].players.every(p => p.connected);
 
-        if (allConnectedSubmitted && rooms[roomCode].gameConfig.numPlayersWithSubmittedWords > 0) {
+        if (allSubmitted && allConnected && rooms[roomCode].gameConfig.numPlayersWithSubmittedWords > 0) {
             console.log(`All connected players have submitted words in room ${roomCode}. Initializing game.`);
 
             const room = rooms[roomCode];

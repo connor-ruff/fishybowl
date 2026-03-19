@@ -85,17 +85,13 @@ function GamePlayScreen({
     const playerName = gameState.clientState.playerName;
     const isHost = gameState.clientState.playerIsHost;
 
-    const currentRound = activeGame.rounds[activeGame.currentRound - 1];
-    const currentTeamName = activeGame.teamOrder[activeGame.currentTeamIndex];
-    const isClueGiver = activeGame.currentClueGiver === playerName;
+    const playerTeam = serverState.playerLookup?.[playerName]?.team;
 
-    const playerTeam = serverState.playerLookup[playerName]?.team;
-    const isOnActiveTeam = playerTeam === currentTeamName;
+    // Hooks must be called unconditionally (React rules of hooks)
+    const [timeLeft, setTimeLeft] = useState(activeGame?.turnTimeLeft ?? 0);
 
-    const [timeLeft, setTimeLeft] = useState(activeGame.turnTimeLeft);
-
-    // Client-side countdown: compute time remaining from server's turnEndsAt timestamp
     useEffect(() => {
+        if (!activeGame) return;
         if (gamePhase !== "turn-active" || !activeGame.turnEndsAt) {
             setTimeLeft(activeGame.turnTimeLeft);
             return;
@@ -106,47 +102,18 @@ function GamePlayScreen({
             setTimeLeft(calcTimeLeft());
         }, 200);
         return () => clearInterval(interval);
-    }, [gamePhase, activeGame.turnEndsAt]);
-
-    const totalScores = {};
-    activeGame.teamOrder.forEach(team => {
-        const roundTotal = activeGame.scores[team].reduce((a, b) => a + b, 0);
-        const hostAdj = activeGame.hostAdjustments?.[team] || 0;
-        totalScores[team] = roundTotal + hostAdj;
-    });
-
-    const timerClass = timeLeft <= 10 ? 'timer-danger' : timeLeft <= 20 ? 'timer-warn' : 'timer-ok';
-    const turnHistory = activeGame.turnHistory || [];
-
-    // Common props for Scoreboard
-    const scoreboardProps = {
-        teamOrder: activeGame.teamOrder,
-        scores: activeGame.scores,
-        hostAdjustments: activeGame.hostAdjustments,
-        totalScores,
-        currentTeamName,
-        currentRound: activeGame.currentRound,
-        rounds: activeGame.rounds,
-        turnHistory
-    };
+    }, [gamePhase, activeGame?.turnEndsAt]);
 
     // ─── Player info header ───
     const PlayerHeader = () => (
         <div className="player-header">
             <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
             <span>{playerName}</span>
-            <span>{playerTeam}</span>
+            {playerTeam && <span>{playerTeam}</span>}
         </div>
     );
 
-    // ─── Round rules banner (shown during turn-ready and turn-active) ───
-    const RoundRuleBanner = () => (
-        <div className="round-rule-banner">
-            <strong>Round {activeGame.currentRound}: {currentRound.name}</strong> — {currentRound.description}
-        </div>
-    );
-
-    // ─── PAUSED ───
+    // ─── PAUSED (checked early since activeGame may not exist during config phases) ───
     if (gamePhase === "paused") {
         const disconnectedPlayers = serverState.players.filter(p => p.connected === false);
         return (
@@ -187,6 +154,41 @@ function GamePlayScreen({
             </div>
         );
     }
+
+    // ─── activeGame-dependent setup (safe after paused early-return) ───
+    const currentRound = activeGame.rounds[activeGame.currentRound - 1];
+    const currentTeamName = activeGame.teamOrder[activeGame.currentTeamIndex];
+    const isClueGiver = activeGame.currentClueGiver === playerName;
+    const isOnActiveTeam = playerTeam === currentTeamName;
+
+    const totalScores = {};
+    activeGame.teamOrder.forEach(team => {
+        const roundTotal = activeGame.scores[team].reduce((a, b) => a + b, 0);
+        const hostAdj = activeGame.hostAdjustments?.[team] || 0;
+        totalScores[team] = roundTotal + hostAdj;
+    });
+
+    const timerClass = timeLeft <= 10 ? 'timer-danger' : timeLeft <= 20 ? 'timer-warn' : 'timer-ok';
+    const turnHistory = activeGame.turnHistory || [];
+
+    // Common props for Scoreboard
+    const scoreboardProps = {
+        teamOrder: activeGame.teamOrder,
+        scores: activeGame.scores,
+        hostAdjustments: activeGame.hostAdjustments,
+        totalScores,
+        currentTeamName,
+        currentRound: activeGame.currentRound,
+        rounds: activeGame.rounds,
+        turnHistory
+    };
+
+    // ─── Round rules banner (shown during turn-ready and turn-active) ───
+    const RoundRuleBanner = () => (
+        <div className="round-rule-banner">
+            <strong>Round {activeGame.currentRound}: {currentRound.name}</strong> — {currentRound.description}
+        </div>
+    );
 
     // ─── ROUND START ───
     if (gamePhase === "round-start") {
