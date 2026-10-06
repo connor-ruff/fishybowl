@@ -1,296 +1,447 @@
-const { generateRoomCode, getPlayerObjects, shuffleArray, getWordArray, startTurnTimer, cancelRoomCleanup } = require('../utils/roomUtils');
+const {
+    generateRoomCode,
+    shuffleArray,
+    buildBowl,
+    stateFor,
+    broadcastRoom,
+    findPlayerBySocket,
+    isHostSocket,
+    cancelGraceTimer,
+    cancelRoomCleanup,
+    startTurnTimer
+} = require('../utils/roomUtils');
+const {
+    getCurrentClueGiver,
+    reassignHost,
+    flagMissingClueGiver,
+    removePlayer,
+    recountWordSubmissions
+} = require('../utils/playerUtils');
+
+const MAX_NAME_LENGTH = 20;
+const MAX_WORD_LENGTH = 100;
+
+// Phases where someone who was never in the game can still be added
+const JOINABLE_PHASES = ["in-lobby", "pre-game-configs"];
+
+function cleanName(raw) {
+    return typeof raw === 'string' ? raw.trim().slice(0, MAX_NAME_LENGTH) : '';
+}
 
 function registerRoomHandlers(io, socket, rooms) {
 
-    // Player creates a room
+    // ─── Create a room ───
     socket.on("create-room", (data, callback) => {
         try {
-        // Support both old format (plain string) and new format ({ playerName, sessionId })
-        const playerName = typeof data === 'string' ? data : data.playerName;
-        const sessionId = typeof data === 'string' ? null : data.sessionId;
+            const playerName = cleanName(typeof data === 'string' ? data : data?.playerName);
+            const sessionId = typeof data === 'string' ? null : data?.sessionId || null;
 
-        const roomCode = generateRoomCode();
-        rooms[roomCode] = {
-            players: [{ id: socket.id, name: playerName, sessionId, is_host: true, connected: true }],
-            hostId: socket.id,
-            hostSessionId: sessionId,
-            gamePhase: "in-lobby"
-        };
-        socket.join(roomCode);
-        console.log(`${playerName} created room ${roomCode}`);
-        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+            if (!playerName) {
+                return callback({ success: false, error: "Enter a name first" });
+            }
+
+            const roomCode = generateRoomCode(rooms);
+            rooms[roomCode] = {
+                code: roomCode,
+                players: [{
+                    id: socket.id,
+                    name: playerName,
+                    sessionId,
+                    is_host: true,
+                    connected: true,
+                    absent: false,
+                    lastSeen: Date.now()
+                }],
+                hostSessionId: sessionId,
+                gamePhase: "in-lobby",
+                waitingFor: null,
+                createdAt: Date.now()
+            };
+            socket.join(roomCode);
+            console.log(`${playerName} created room ${roomCode}`);
+            callback({ success: true, roomCode, gameState: stateFor(rooms[roomCode], socket.id) });
         } catch (err) {
             console.error(`Error in create-room:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-
-    // Player joins a room (or rejoins after disconnect)
+    // ─── Join or rejoin a room ───
     socket.on("join-room", (data, callback) => {
         try {
-        const { roomCode, playerName, sessionId } = data;
-        const room = rooms[roomCode];
-        if (!room) {
-            callback({ success: false, error: "Room not found" });
-            return;
-        }
+            const roomCode = typeof data?.roomCode === 'string' ? data.roomCode.trim().toUpperCase() : '';
+            const playerName = cleanName(data?.playerName);
+            const sessionId = data?.sessionId || null;
 
-        // Cancel any pending room cleanup since someone is joining
-        cancelRoomCleanup(roomCode);
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!playerName) return callback({ success: false, error: "Enter a name first" });
 
-        // Check for rejoin — match by sessionId first, then by name
-        let disconnectedPlayer = null;
-        if (sessionId) {
-            disconnectedPlayer = room.players.find(p => p.sessionId === sessionId && !p.connected);
-        }
-        if (!disconnectedPlayer) {
-            disconnectedPlayer = room.players.find(p => p.name === playerName && !p.connected);
-        }
+            cancelRoomCleanup(roomCode);
 
-        if (disconnectedPlayer) {
-            // Rejoin: update socket ID & sessionId, mark connected
-            disconnectedPlayer.id = socket.id;
-            if (sessionId) disconnectedPlayer.sessionId = sessionId;
-            disconnectedPlayer.connected = true;
-            socket.join(roomCode);
-            console.log(`${playerName} rejoined room ${roomCode}`);
-
-            // If this player is host, update hostId
-            if (disconnectedPlayer.is_host) {
-                room.hostId = socket.id;
-                if (sessionId) room.hostSessionId = sessionId;
+            // Is this somebody coming back? Match on session first (survives a
+            // name retype), then on an exact name that isn't currently live.
+            let returning = sessionId
+                ? room.players.find(p => p.sessionId === sessionId)
+                : null;
+            if (!returning) {
+                returning = room.players.find(
+                    p => p.name.toLowerCase() === playerName.toLowerCase() && !p.connected
+                );
             }
 
-            // Broadcast updated state so everyone sees the player reconnected
-            io.to(roomCode).emit("game-state-update", room);
-            callback({
-                success: true, roomCode, gameState: room,
-                isRejoin: true, isHost: disconnectedPlayer.is_host
+            if (returning) {
+                // Clean up any socket still registered under the old id
+                if (returning.id && returning.id !== socket.id) {
+                    const stale = io.sockets.sockets.get(returning.id);
+                    if (stale) stale.leave(roomCode);
+                }
+
+                returning.id = socket.id;
+                if (sessionId) returning.sessionId = sessionId;
+                returning.connected = true;
+                returning.absent = false;
+                returning.lastSeen = Date.now();
+                cancelGraceTimer(roomCode, returning.name);
+                socket.join(roomCode);
+                console.log(`${returning.name} rejoined room ${roomCode} (phase: ${room.gamePhase})`);
+
+                if (room.playerLookup?.[returning.name]) {
+                    room.playerLookup[returning.name].id = socket.id;
+                    room.playerLookup[returning.name].sessionId = returning.sessionId;
+                }
+
+                // Room has no usable host (original left for good) — hand it over
+                reassignHost(room, roomCode);
+
+                // If the game was holding for this player, pick straight back up
+                const wasWaitingOnThem = room.waitingFor === returning.name;
+                flagMissingClueGiver(room, roomCode);
+                if (wasWaitingOnThem && !room.waitingFor && room.gamePhase === "turn-active") {
+                    startTurnTimer(io, roomCode, rooms);
+                }
+
+                broadcastRoom(io, roomCode, rooms);
+                return callback({
+                    success: true,
+                    roomCode,
+                    isRejoin: true,
+                    gameState: stateFor(room, socket.id)
+                });
+            }
+
+            // ─── New player ───
+            if (!JOINABLE_PHASES.includes(room.gamePhase)) {
+                return callback({
+                    success: false,
+                    error: "That game is already underway. Ask the host to add you after this game."
+                });
+            }
+
+            const nameTaken = room.players.some(
+                p => p.name.toLowerCase() === playerName.toLowerCase()
+            );
+            if (nameTaken) {
+                return callback({
+                    success: false,
+                    error: `"${playerName}" is already taken in this room — pick a different name`
+                });
+            }
+
+            room.players.push({
+                id: socket.id,
+                name: playerName,
+                sessionId,
+                is_host: false,
+                connected: true,
+                absent: false,
+                lastSeen: Date.now()
             });
-            return;
-        }
+            socket.join(roomCode);
+            console.log(`${playerName} joined room ${roomCode}`);
 
-        // Normal join — only allowed during lobby
-        if (room.gamePhase !== "in-lobby") {
-            callback({ success: false, error: "Game already in progress" });
-            return;
-        }
-
-        room.players.push({ id: socket.id, name: playerName, sessionId, is_host: false, connected: true });
-        socket.join(roomCode);
-        console.log(`${playerName} joined room ${roomCode}`);
-
-        // Notify all players in room about updated player list
-        io.to(roomCode).emit("update-players", rooms[roomCode]);
-
-        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, roomCode, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in join-room:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
+    // ─── Host removes a player (works in any phase) ───
+    socket.on("remove-player", (roomCode, playerName, callback) => {
+        try {
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can remove players" });
+            }
+            const self = findPlayerBySocket(room, socket.id);
+            if (self.name === playerName) {
+                return callback({ success: false, error: "You can't remove yourself" });
+            }
+            const result = removePlayer(io, roomCode, rooms, playerName);
+            callback(result.success
+                ? { success: true, gameState: stateFor(room, socket.id) }
+                : result);
+        } catch (err) {
+            console.error(`Error in remove-player:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
+    });
 
+    // ─── Host hands off host duties ───
+    socket.on("transfer-host", (roomCode, playerName, callback) => {
+        try {
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can transfer host" });
+            }
+            const target = room.players.find(p => p.name === playerName);
+            if (!target) return callback({ success: false, error: "Player not in room" });
 
-    // Host starts the game
+            room.players.forEach(p => { p.is_host = false; });
+            target.is_host = true;
+            room.hostSessionId = target.sessionId;
+            if (room.playerLookup) {
+                for (const [name, info] of Object.entries(room.playerLookup)) {
+                    info.is_host = name === target.name;
+                }
+            }
+            console.log(`Host of room ${roomCode} transferred to ${target.name}`);
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
+        } catch (err) {
+            console.error(`Error in transfer-host:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
+    });
+
+    // ─── Host moves the lobby into setup ───
     socket.on("start-game", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can start the game" });
+            }
+            if (room.players.length < 2) {
+                return callback({ success: false, error: "Need at least 2 players" });
+            }
 
-        const disconnected = room.players.filter(p => !p.connected);
-        if (disconnected.length > 0) {
-            return callback({ success: false, error: `Cannot start — ${disconnected.map(p => p.name).join(', ')} disconnected` });
-        }
-
-        console.log(`Game started in room ${roomCode}`);
-        room.gamePhase = "pre-game-configs";
-        io.to(roomCode).emit("game-started", room);
-        callback({ success: true, roomCode, gameState: room });
+            console.log(`Room ${roomCode} moving to setup`);
+            room.gamePhase = "pre-game-configs";
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, roomCode, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in start-game:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Host submits game configuration
+    // ─── Host submits teams + word count ───
     socket.on("submit-game-config", (roomCode, config, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
-
-        const disconnected = room.players.filter(p => !p.connected);
-        if (disconnected.length > 0) {
-            return callback({ success: false, error: `Cannot proceed — ${disconnected.map(p => p.name).join(', ')} disconnected` });
-        }
-
-        console.log(`Received game configuration for room ${roomCode}:\n`, config);
-
-        // Validate every team has at least 1 player
-        for (const team of config.teams) {
-            if (!team.players || team.players.length === 0) {
-                return callback({ success: false, error: `Team "${team.name}" has no players assigned` });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can configure the game" });
             }
-        }
+            if (!config || !Array.isArray(config.teams) || config.teams.length < 2) {
+                return callback({ success: false, error: "Need at least 2 teams" });
+            }
 
-        rooms[roomCode].gameConfig = config;
-        rooms[roomCode].playerLookup = {};
-        rooms[roomCode].teamLookup = {};
-        rooms[roomCode].gamePhase = "collecting-words";
-        rooms[roomCode].wordList = { "numberOfWords": 0 };
-
-        let totalPlayers = 0;
-        for (let i = 0; i < config.teams.length; i++) {
-            let teamName = config.teams[i].name;
-            let playersArray = config.teams[i].players;
-
-            for (let j = 0; j < playersArray.length; j++) {
-
-                totalPlayers += 1;
-                let player_id = null;
-                let is_host = false;
-                let playerSessionId = null;
-                // Find player in current state object
-                for (let k = 0; k < rooms[roomCode].players.length; k++) {
-                    if (rooms[roomCode].players[k].name === playersArray[j]) {
-                        player_id = rooms[roomCode].players[k].id;
-                        is_host = rooms[roomCode].players[k].is_host;
-                        playerSessionId = rooms[roomCode].players[k].sessionId;
-                        break;
+            const roomNames = new Set(room.players.map(p => p.name));
+            const assigned = [];
+            for (const team of config.teams) {
+                if (!team.players || team.players.length === 0) {
+                    return callback({ success: false, error: `Team "${team.name}" has no players` });
+                }
+                for (const name of team.players) {
+                    if (!roomNames.has(name)) {
+                        return callback({ success: false, error: `${name} is no longer in the room` });
                     }
+                    if (assigned.includes(name)) {
+                        return callback({ success: false, error: `${name} is on two teams` });
+                    }
+                    assigned.push(name);
                 }
-
-                rooms[roomCode].playerLookup[playersArray[j]] = {
-                    "id": player_id,
-                    "sessionId": playerSessionId,
-                    "is_host": is_host,
-                    "team": teamName,
-                    "wordsSubmitted": false
-                };
-
-                if (!rooms[roomCode].teamLookup[teamName]) {
-                    rooms[roomCode].teamLookup[teamName] = {
-                        "members": [],
-                        "score": 0
-                    };
-                }
-                rooms[roomCode].teamLookup[teamName]["members"].push(playersArray[j]);
             }
-        }
 
-        rooms[roomCode].gameConfig.numPlayers = totalPlayers;
-        rooms[roomCode].gameConfig.numPlayersWithSubmittedWords = 0;
+            const wordsPerPlayer = Math.min(10, Math.max(1, parseInt(config.wordsPerPlayer) || 3));
 
+            // Anyone the host left unassigned is sitting this game out
+            const sittingOut = room.players.filter(p => !assigned.includes(p.name));
+            for (const player of sittingOut) {
+                console.log(`${player.name} left unassigned — dropping from room ${roomCode}`);
+                removePlayer(io, roomCode, rooms, player.name);
+            }
 
-        io.to(roomCode).emit("game-started", rooms[roomCode]);
-        callback({ success: true, roomCode, gameState: rooms[roomCode] });
+            if (!rooms[roomCode]) return callback({ success: false, error: "Room closed" });
+
+            room.gameConfig = {
+                teams: config.teams.map(t => ({
+                    name: cleanName(t.name) || "Team",
+                    players: [...t.players]
+                })),
+                wordsPerPlayer
+            };
+            room.playerLookup = {};
+            room.teamLookup = {};
+            room.gamePhase = "collecting-words";
+            room.waitingFor = null;
+
+            for (const team of room.gameConfig.teams) {
+                room.teamLookup[team.name] = { members: [], score: 0 };
+                for (const name of team.players) {
+                    const player = room.players.find(p => p.name === name);
+                    room.playerLookup[name] = {
+                        id: player?.id || null,
+                        sessionId: player?.sessionId || null,
+                        is_host: !!player?.is_host,
+                        team: team.name,
+                        wordsSubmitted: false,
+                        submittedWords: []
+                    };
+                    room.teamLookup[team.name].members.push(name);
+                }
+            }
+
+            recountWordSubmissions(room);
+            console.log(`Room ${roomCode} collecting ${wordsPerPlayer} words from ${room.gameConfig.numPlayers} players`);
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, roomCode, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in submit-game-config:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Player submits their words
+    // ─── A player submits their words ───
     socket.on("submit-words", (roomCode, playerName, words, callback) => {
         try {
-        console.log(`Received words from ${playerName} in room ${roomCode}:`, words);
-
-        // Add words to word list
-        let currentNumWords = rooms[roomCode].wordList ? rooms[roomCode].wordList.numberOfWords : 0;
-        for (let i = 0; i < words.length; i++) {
-            rooms[roomCode].wordList[currentNumWords + i] = words[i];
-        }
-        rooms[roomCode].wordList.numberOfWords = currentNumWords + words.length;
-
-        if (rooms[roomCode] && rooms[roomCode].playerLookup[playerName]) {
-            rooms[roomCode].playerLookup[playerName].submittedWords = words;
-            rooms[roomCode].playerLookup[playerName].wordsSubmitted = true;
-
-            // Count only connected players who need to submit words
-            let submittedCount = 0;
-            let connectedCount = 0;
-            for (const pname in rooms[roomCode].playerLookup) {
-                const pInfo = rooms[roomCode].playerLookup[pname];
-                // Find matching player in players array to check connected status
-                const playerObj = rooms[roomCode].players.find(p => p.name === pname);
-                const isConnected = playerObj ? playerObj.connected : true;
-
-                if (pInfo.wordsSubmitted) {
-                    submittedCount += 1;
-                }
-                if (isConnected) {
-                    connectedCount += 1;
-                }
-            }
-            rooms[roomCode].gameConfig.numPlayersWithSubmittedWords = submittedCount;
-
-            console.log(`Updated playerLookup for room ${roomCode}:\n`, rooms[roomCode].playerLookup);
-        };
-        callback({ success: true, roomCode, gameState: rooms[roomCode] });
-
-        // Broadcast so waiting players see updated submission count
-        io.to(roomCode).emit("game-state-update", rooms[roomCode]);
-
-        // Check if all players have submitted words AND are connected
-        const allSubmitted = Object.keys(rooms[roomCode].playerLookup).every(pname => {
-            return rooms[roomCode].playerLookup[pname].wordsSubmitted;
-        });
-        const allConnected = rooms[roomCode].players.every(p => p.connected);
-
-        if (allSubmitted && allConnected && rooms[roomCode].gameConfig.numPlayersWithSubmittedWords > 0) {
-            console.log(`All connected players have submitted words in room ${roomCode}. Initializing game.`);
-
             const room = rooms[roomCode];
-            const teamNames = Object.keys(room.teamLookup);
-            const scores = {};
-            const wordsCorrect = {};
-            const skipPenalties = {};
-            const hostAdjustments = {};
-            const clueGiverRotation = {};
-            teamNames.forEach(name => {
-                scores[name] = [0, 0, 0];
-                wordsCorrect[name] = [0, 0, 0];
-                skipPenalties[name] = [0, 0, 0];
-                hostAdjustments[name] = 0;
-                clueGiverRotation[name] = 0;
-            });
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (room.gamePhase !== "collecting-words") {
+                return callback({ success: false, error: "Not collecting words right now" });
+            }
 
-            room.activeGame = {
-                currentRound: 1,
-                rounds: [
-                    { name: "Describe It", description: "Use as many words as you want to describe the word or phrase. No acting, no gestures!" },
-                    { name: "Act It Out", description: "Act it out! No talking, no sounds allowed!" },
-                    { name: "One Word", description: "Say only ONE word as a clue. No gestures, no sounds!" }
-                ],
-                teamOrder: teamNames,
-                currentTeamIndex: 0,
-                clueGiverRotation: clueGiverRotation,
-                currentClueGiver: room.teamLookup[teamNames[0]].members[0],
-                currentWord: null,
-                wordsRemaining: shuffleArray(getWordArray(room)),
-                wordsGuessedThisTurn: [],
-                skipsThisTurn: 0,
-                turnHistory: [],
-                turnDuration: 60,
-                turnTimeLeft: 60,
-                carriedTimeLeft: null,
-                scores: scores,
-                wordsCorrect: wordsCorrect,
-                skipPenalties: skipPenalties,
-                hostAdjustments: hostAdjustments
-            };
+            // Trust the socket's identity over the name the client sent
+            const self = findPlayerBySocket(room, socket.id);
+            const name = self ? self.name : playerName;
+            const entry = room.playerLookup?.[name];
+            if (!entry) return callback({ success: false, error: "You're not in this game" });
 
-            room.gamePhase = "round-start";
-            io.to(roomCode).emit("all-words-submitted", rooms[roomCode]);
-        }
+            const cleaned = (Array.isArray(words) ? words : [])
+                .map(w => (typeof w === 'string' ? w.trim().slice(0, MAX_WORD_LENGTH) : ''))
+                .filter(w => w.length > 0);
+
+            if (cleaned.length === 0) {
+                return callback({ success: false, error: "Enter at least one word" });
+            }
+
+            // Overwrite rather than append — resubmitting after a reconnect
+            // must not double up the bowl.
+            entry.submittedWords = cleaned;
+            entry.wordsSubmitted = true;
+            recountWordSubmissions(room);
+            console.log(`${name} submitted ${cleaned.length} words in room ${roomCode}`);
+
+            const everyoneIn = Object.values(room.playerLookup).every(p => p.wordsSubmitted);
+            if (everyoneIn) {
+                initializeGame(room);
+                console.log(`All words in for room ${roomCode} — starting game`);
+            }
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, roomCode, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in submit-words:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
+    // ─── Host starts without the stragglers' words ───
+    socket.on("force-start-game", (roomCode, callback) => {
+        try {
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can do that" });
+            }
+            if (room.gamePhase !== "collecting-words") {
+                return callback({ success: false, error: "Not collecting words right now" });
+            }
+            if (buildBowl(room).length < 2) {
+                return callback({ success: false, error: "Need at least 2 words in the bowl to start" });
+            }
 
+            initializeGame(room);
+            console.log(`Host force-started room ${roomCode} with ${room.activeGame.allWords.length} words`);
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
+        } catch (err) {
+            console.error(`Error in force-start-game:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
+    });
 }
 
-module.exports = { registerRoomHandlers };
+// Build the activeGame object and move the room to round 1.
+// allWords is a snapshot so later joins/removals can't resize the bowl mid-game.
+function initializeGame(room) {
+    const teamNames = Object.keys(room.teamLookup).filter(
+        t => room.teamLookup[t].members.length > 0
+    );
+
+    const scores = {};
+    const wordsCorrect = {};
+    const skipPenalties = {};
+    const hostAdjustments = {};
+    const clueGiverRotation = {};
+    teamNames.forEach(name => {
+        scores[name] = [0, 0, 0];
+        wordsCorrect[name] = [0, 0, 0];
+        skipPenalties[name] = [0, 0, 0];
+        hostAdjustments[name] = 0;
+        clueGiverRotation[name] = 0;
+    });
+
+    const allWords = buildBowl(room);
+
+    room.activeGame = {
+        currentRound: 1,
+        rounds: [
+            { name: "Describe It", description: "Use as many words as you want to describe the word or phrase. No acting, no gestures!" },
+            { name: "Act It Out", description: "Act it out! No talking, no sounds allowed!" },
+            { name: "One Word", description: "Say only ONE word as a clue. No gestures, no sounds!" }
+        ],
+        teamOrder: teamNames,
+        currentTeamIndex: 0,
+        clueGiverRotation,
+        currentClueGiver: null,
+        currentWord: null,
+        allWords,
+        wordsRemaining: shuffleArray(allWords),
+        wordsGuessedThisTurn: [],
+        skipsThisTurn: 0,
+        turnHistory: [],
+        turnDuration: 60,
+        turnTimeLeft: 60,
+        carriedTimeLeft: null,
+        scores,
+        wordsCorrect,
+        skipPenalties,
+        hostAdjustments
+    };
+
+    room.activeGame.currentClueGiver = getCurrentClueGiver(room);
+    room.gamePhase = "round-start";
+    room.waitingFor = null;
+}
+
+module.exports = { registerRoomHandlers, initializeGame };

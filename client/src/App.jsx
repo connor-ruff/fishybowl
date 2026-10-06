@@ -1,280 +1,281 @@
-import { useState, useEffect, useRef } from "react";
-import { io } from "socket.io-client";
+import { useState, useEffect, useRef, useCallback } from "react";
 import StartScreen from "./components/StartScreen";
 import LobbyScreen from "./components/LobbyScreen";
 import PreGameConfigsScreen from "./components/PreGameConfigScreen";
 import CollectWordsScreen from "./components/CollectWordsScreen";
+import WaitingForWordsScreen from "./components/WaitingForWordsScreen";
 import GamePlayScreen from "./components/GamePlayScreen";
+import ConnectionBanner from "./components/ConnectionBanner";
 import { useGameHandlers } from './hooks/useGameHandlers';
-import { SESSION_ID } from './utils/session';
+import { socket, forceReconnect } from './socket';
+import { SESSION_ID, loadSession, saveSession, clearSession } from './utils/session';
 
-const socket = io();
+const GAMEPLAY_PHASES = [
+  "round-start", "turn-ready", "turn-active", "turn-end", "round-end", "game-over"
+];
 
-const GAMEPLAY_PHASES = ["round-start", "turn-ready", "turn-active", "turn-end", "round-end", "game-over", "paused"];
+// The server owns the phase. The only two screens the client decides on its own
+// are the pre-room start page and the rejoin handshake; everything else is read
+// straight off the latest server snapshot.
+function deriveScreen(serverState, localPhase, playerName) {
+  if (localPhase) return localPhase;
+  if (!serverState) return "start-page";
 
-// Derives the display phase from server + client state.
-// The only client-only override is "collecting-words-waiting-for-others".
-function deriveDisplayPhase(serverState, clientState) {
-  if (clientState.clientGamePhase === "start-page") return "start-page";
-  if (clientState.clientGamePhase === "connection-error") return "connection-error";
-  if (!serverState) return clientState.clientGamePhase;
-
-  const serverPhase = serverState.gamePhase;
-
-  // Client-only override: player submitted words but others haven't
-  if (serverPhase === "collecting-words" && clientState.clientGamePhase === "collecting-words-waiting-for-others") {
-    return "collecting-words-waiting-for-others";
+  const phase = serverState.gamePhase;
+  if (phase === "in-lobby") return "lobby";
+  if (phase === "collecting-words") {
+    return serverState.playerLookup?.[playerName]?.wordsSubmitted
+      ? "words-waiting"
+      : "collecting-words";
   }
-
-  // For lobby, use client phase since client tracks "lobby" while server uses "in-lobby"
-  if (serverPhase === "in-lobby") return "in-lobby";
-
-  return serverPhase;
+  return phase;
 }
 
 function App() {
-
   const [gameState, setGameState] = useState({
     serverState: null,
     clientState: {
-      playerName: null,
-      playerIsHost: null,
-      clientGamePhase: "start-page",
-      roomCode: null
+      playerName: "",
+      playerIsHost: false,
+      roomCode: "",
+      // null means "follow the server"; a string pins a client-only screen
+      localPhase: "start-page"
     }
   });
+  const [connected, setConnected] = useState(socket.connected);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  // Ref for auto-rejoin (avoids stale closure in socket listener)
+  // Kept in a ref so socket listeners never read stale state
   const gameStateRef = useRef(gameState);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
-  // Consolidated socket event listeners
+  // Applies a server snapshot. Note what this does NOT do: it never pulls the
+  // player off their current screen for someone else's connection trouble.
+  const applyServerState = useCallback((serverState) => {
+    setGameState(prev => {
+      const myName = serverState.you?.name || prev.clientState.playerName;
+      return {
+        serverState,
+        clientState: {
+          ...prev.clientState,
+          playerName: myName,
+          playerIsHost: serverState.you
+            ? serverState.you.is_host
+            : prev.clientState.playerIsHost,
+          roomCode: serverState.code || prev.clientState.roomCode,
+          localPhase: null
+        }
+      };
+    });
+  }, []);
+
+  const resetToStart = useCallback((message = "") => {
+    clearSession();
+    setGameState(prev => ({
+      serverState: null,
+      clientState: {
+        playerName: prev.clientState.playerName,
+        playerIsHost: false,
+        roomCode: "",
+        localPhase: "start-page"
+      }
+    }));
+    setError("");
+    setNotice(message);
+  }, []);
+
+  const attemptRejoin = useCallback((roomCode, playerName, { showScreen } = {}) => {
+    if (showScreen) {
+      setGameState(prev => ({
+        ...prev,
+        clientState: { ...prev.clientState, roomCode, playerName, localPhase: "rejoining" }
+      }));
+    }
+    socket.emit("join-room", { roomCode, playerName, sessionId: SESSION_ID }, (res) => {
+      if (res?.success) {
+        saveSession(res.roomCode, res.gameState.you?.name || playerName);
+        applyServerState(res.gameState);
+        setError("");
+      } else {
+        resetToStart(res?.error || "Couldn't get you back into that game.");
+      }
+    });
+  }, [applyServerState, resetToStart]);
+
+  // ─── Server snapshots ───
   useEffect(() => {
-    const handleServerState = (serverState) => {
-      setGameState(prev => {
-        const serverPhase = serverState.gamePhase;
-        let newClientPhase = prev.clientState.clientGamePhase;
+    const onRemoved = () => resetToStart("The host removed you from the game.");
 
-        // Sync client phase from server, preserving client-only overrides
-        if (serverPhase === "in-lobby") {
-          newClientPhase = "lobby";
-        } else if (serverPhase === "pre-game-configs") {
-          newClientPhase = "pre-game-configs";
-        } else if (serverPhase === "collecting-words") {
-          // Check if this player already submitted words (handles resume from pause)
-          const myName = prev.clientState.playerName;
-          const alreadySubmitted = myName && serverState.playerLookup?.[myName]?.wordsSubmitted;
-          if (alreadySubmitted || newClientPhase === "collecting-words-waiting-for-others") {
-            newClientPhase = "collecting-words-waiting-for-others";
-          } else {
-            newClientPhase = "collecting-words";
-          }
-        } else {
-          // For all other phases (gameplay, paused, etc.), sync directly
-          newClientPhase = serverPhase;
+    socket.on("game-state-update", applyServerState);
+    socket.on("removed-from-room", onRemoved);
+    return () => {
+      socket.off("game-state-update", applyServerState);
+      socket.off("removed-from-room", onRemoved);
+    };
+  }, [applyServerState, resetToStart]);
+
+  // ─── Connection lifecycle ───
+  useEffect(() => {
+    const onConnect = () => {
+      setConnected(true);
+      // Fall back to stored session: on a cold page load the socket can
+      // connect before React has finished wiring up state.
+      const live = gameStateRef.current.clientState;
+      const target = live.roomCode && live.playerName ? live : loadSession();
+      if (target?.roomCode && target?.playerName) {
+        attemptRejoin(target.roomCode, target.playerName);
+      }
+    };
+    const onDisconnect = () => setConnected(false);
+    setConnected(socket.connected);
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
+  }, [attemptRejoin]);
+
+  // ─── Wake-up watchdog ───
+  // The critical mobile case: Safari freezes the tab, the socket dies silently,
+  // and on return the client still believes it's connected. Probe the server on
+  // every wake-up and force a new transport if it doesn't answer.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!socket.connected) {
+        socket.connect();
+        return;
+      }
+      const { roomCode } = gameStateRef.current.clientState;
+      if (!roomCode) return;
+      socket.timeout(4000).emit("sync-state", roomCode, (err, res) => {
+        if (err) {
+          forceReconnect();
+        } else if (res?.success) {
+          applyServerState(res.gameState);
         }
-
-        // Update host status if current player's host status changed
-        const playerName = prev.clientState.playerName;
-        let playerIsHost = prev.clientState.playerIsHost;
-        if (playerName && serverState.players) {
-          const me = serverState.players.find(p => p.name === playerName);
-          if (me) {
-            playerIsHost = me.is_host;
-          }
-        }
-
-        return {
-          ...prev,
-          serverState,
-          clientState: { ...prev.clientState, clientGamePhase: newClientPhase, playerIsHost }
-        };
       });
     };
 
-    socket.on("update-players", handleServerState);
-    socket.on("game-started", handleServerState);
-    socket.on("all-words-submitted", handleServerState);
-    socket.on("game-state-update", handleServerState);
-
+    window.addEventListener("visibilitychange", check);
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    window.addEventListener("online", check);
+    const interval = setInterval(check, 15000);
     return () => {
-      socket.off("update-players");
-      socket.off("game-started");
-      socket.off("all-words-submitted");
-      socket.off("game-state-update");
+      window.removeEventListener("visibilitychange", check);
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+      window.removeEventListener("online", check);
+      clearInterval(interval);
     };
-  }, []);
+  }, [applyServerState]);
 
-  // Auto-rejoin on socket reconnect
+  // Nudge page padding so the fixed banner never covers the card
   useEffect(() => {
-    let hasConnected = false;
-    const handleConnect = () => {
-      if (!hasConnected) {
-        hasConnected = true;
-        return; // Skip initial connection
-      }
-      const gs = gameStateRef.current;
-      const { roomCode, playerName } = gs.clientState;
-      if (roomCode && playerName && gs.serverState) {
-        console.log("Socket reconnected — attempting auto-rejoin...");
-        socket.emit("join-room", { roomCode, playerName, sessionId: SESSION_ID }, (res) => {
-          if (res.success) {
-            setGameState(prev => ({
-              ...prev,
-              serverState: res.gameState,
-              clientState: {
-                ...prev.clientState,
-                playerIsHost: res.isHost || prev.clientState.playerIsHost,
-                clientGamePhase: res.gameState.gamePhase === "in-lobby" ? "lobby" : res.gameState.gamePhase
-              }
-            }));
-          } else {
-            // Rejoin failed — show recovery UI
-            setGameState(prev => ({
-              ...prev,
-              clientState: { ...prev.clientState, clientGamePhase: "connection-error" }
-            }));
-            setError(res.error || "Failed to rejoin the game");
-          }
-        });
-      }
-    };
-    socket.on("connect", handleConnect);
-    return () => socket.off("connect", handleConnect);
+    document.body.classList.toggle("conn-offline", !connected);
+    return () => document.body.classList.remove("conn-offline");
+  }, [connected]);
+
+  // ─── Resume a game after a refresh or tab close ───
+  useEffect(() => {
+    const saved = loadSession();
+    if (!saved) return;
+    if (socket.connected) {
+      attemptRejoin(saved.roomCode, saved.playerName, { showScreen: true });
+    } else {
+      setGameState(prev => ({
+        ...prev,
+        clientState: {
+          ...prev.clientState,
+          roomCode: saved.roomCode,
+          playerName: saved.playerName,
+          localPhase: "rejoining"
+        }
+      }));
+    }
+    // Intentionally runs once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const {
-    handleCreateRoom, handleJoinRoom, handleStartGame,
-    handleSubmitGameConfig, handleSubmitWords,
-    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed,
-    handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
-    handleAdjustScore, handleRetryRejoin, handleReturnToStart
-  } = useGameHandlers(socket, gameState, setGameState, setError);
+  const handlers = useGameHandlers(socket, gameState, setGameState, setError, {
+    applyServerState,
+    resetToStart
+  });
 
-  const displayPhase = deriveDisplayPhase(gameState.serverState, gameState.clientState);
+  const screen = deriveScreen(
+    gameState.serverState,
+    gameState.clientState.localPhase,
+    gameState.clientState.playerName
+  );
 
-  /////////////////////////////////////////////////
-  // Render based on derived display phase
-  /////////////////////////////////////////////////
-  switch (displayPhase) {
-    case "start-page":
-      return (
-        <StartScreen
-          gameState={gameState}
-          setGameState={setGameState}
-          error={error}
-          setError={setError}
-          handleCreateRoom={handleCreateRoom}
-          handleJoinRoom={handleJoinRoom}
-        />
-      );
+  const shared = { gameState, setGameState, error, setError, ...handlers };
 
-    case "lobby":
-    case "in-lobby":
-      return (
-        <LobbyScreen
-          gameState={gameState}
-          setGameState={setGameState}
-          error={error}
-          setError={setError}
-          handleStartGame={handleStartGame}
-        />
-      );
+  const body = (() => {
+    switch (screen) {
+      case "start-page":
+        return <StartScreen {...shared} notice={notice} setNotice={setNotice} />;
 
-    case "pre-game-configs":
-      return (
-        <PreGameConfigsScreen
-          gameState={gameState}
-          setGameState={setGameState}
-          error={error}
-          setError={setError}
-          handleSubmitGameConfig={handleSubmitGameConfig}
-        />
-      );
-
-    case "collecting-words":
-      return (
-        <CollectWordsScreen
-          gameState={gameState}
-          setGameState={setGameState}
-          error={error}
-          setError={setError}
-          handleSubmitWords={handleSubmitWords}
-        />
-      );
-
-    case "collecting-words-waiting-for-others": {
-      const config = gameState.serverState?.gameConfig;
-      const submitted = config?.numPlayersWithSubmittedWords ?? '?';
-      const total = config?.numPlayers ?? '?';
-      return (
-        <div className="page">
-          <div className="card card-center">
-            <div className="player-header">
-              <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
-              <span>{gameState.clientState.playerName}</span>
-            </div>
-            <h1 className="title title-sm">Words Submitted!</h1>
-            <p className="muted">{submitted} of {total} players have submitted their words.</p>
-          </div>
-        </div>
-      );
-    }
-
-    case "connection-error":
-      return (
-        <div className="page">
-          <div className="card card-center">
-            <h1 className="title title-sm">Connection Lost</h1>
-            <p className="muted">{error || "Lost connection to the game."}</p>
-            <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', justifyContent: 'center' }}>
-              <button className="btn-primary" onClick={handleRetryRejoin}>
-                Retry
-              </button>
-              <button className="btn-secondary" onClick={handleReturnToStart}>
-                Return Home
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-
-    default:
-      if (GAMEPLAY_PHASES.includes(displayPhase)) {
+      case "rejoining":
         return (
-          <GamePlayScreen
-            gameState={gameState}
-            setGameState={setGameState}
-            error={error}
-            setError={setError}
-            handleResumeGame={handleResumeGame}
-            handleStartRound={handleStartRound}
-            handleStartTurn={handleStartTurn}
-            handleWordGuessed={handleWordGuessed}
-            handleSkipWord={handleSkipWord}
-            handleNextTurn={handleNextTurn}
-            handleNextRound={handleNextRound}
-            handlePlayAgain={handlePlayAgain}
-            handleAdjustScore={handleAdjustScore}
-          />
-        );
-      }
-
-      console.log("Unknown game state:\n", gameState);
-      return (
-        <div className="page">
-          <div className="card card-center">
-            <h1 className="title title-sm">Unknown Game State</h1>
-            <p className="muted">Something went wrong.</p>
-            <pre style={{ fontSize: '0.7em', overflow: 'auto' }}>{JSON.stringify(gameState, null, 2)}</pre>
-            <button className="btn-secondary" onClick={handleReturnToStart} style={{ marginTop: '1rem' }}>
-              Return Home
-            </button>
+          <div className="page">
+            <div className="card card-center">
+              <h1 className="title title-sm">Rejoining&hellip;</h1>
+              <p className="muted">
+                Getting you back into room <strong>{gameState.clientState.roomCode}</strong>
+              </p>
+              <button
+                className="btn-secondary"
+                onClick={() => resetToStart()}
+                style={{ marginTop: '1rem' }}
+              >
+                Start over
+              </button>
+            </div>
           </div>
-        </div>
-      );
-  }
+        );
+
+      case "lobby":
+        return <LobbyScreen {...shared} />;
+
+      case "pre-game-configs":
+        return <PreGameConfigsScreen {...shared} />;
+
+      case "collecting-words":
+        return <CollectWordsScreen {...shared} />;
+
+      case "words-waiting":
+        return <WaitingForWordsScreen {...shared} />;
+
+      default:
+        if (GAMEPLAY_PHASES.includes(screen)) {
+          return <GamePlayScreen {...shared} />;
+        }
+        return (
+          <div className="page">
+            <div className="card card-center">
+              <h1 className="title title-sm">Something went sideways</h1>
+              <p className="muted">
+                The game is in an unexpected state{screen ? ` ("${screen}")` : ""}.
+              </p>
+              <button className="btn-primary" onClick={() => resetToStart()}>
+                Back to start
+              </button>
+            </div>
+          </div>
+        );
+    }
+  })();
+
+  return (
+    <>
+      <ConnectionBanner connected={connected} onRetry={forceReconnect} />
+      {body}
+    </>
+  );
 }
 
 export default App;

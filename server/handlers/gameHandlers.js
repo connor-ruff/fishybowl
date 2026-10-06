@@ -1,106 +1,95 @@
-const { shuffleArray, getWordArray, clearTurnTimer, startTurnTimer } = require('../utils/roomUtils');
-
-function getCurrentClueGiver(room) {
-    const game = room.activeGame;
-    const teamName = game.teamOrder[game.currentTeamIndex];
-    const members = room.teamLookup[teamName].members;
-    const idx = game.clueGiverRotation[teamName] % members.length;
-    return members[idx];
-}
-
-function broadcastState(io, roomCode, rooms) {
-    io.to(roomCode).emit("game-state-update", rooms[roomCode]);
-}
-
-// Pause if ANY player is disconnected (used at round boundaries)
-function pauseIfAnyDisconnected(room, roomCode) {
-    const disconnected = room.players.filter(p => !p.connected);
-    if (disconnected.length > 0) {
-        room.pausedGamePhase = room.gamePhase;
-        room.gamePhase = "paused";
-        console.log(`Game paused in room ${roomCode} — waiting for disconnected players: ${disconnected.map(p => p.name).join(', ')}`);
-    }
-}
-
-// Pause only if the current clue giver is disconnected (used mid-round)
-function pauseIfClueGiverDisconnected(room, roomCode) {
-    const clueGiverName = room.activeGame.currentClueGiver;
-    const clueGiverPlayer = room.players.find(p => p.name === clueGiverName);
-    if (clueGiverPlayer && !clueGiverPlayer.connected) {
-        room.pausedGamePhase = room.gamePhase;
-        room.gamePhase = "paused";
-        console.log(`Game paused in room ${roomCode} — clue giver ${clueGiverName} is disconnected`);
-    }
-}
+const {
+    shuffleArray,
+    stateFor,
+    broadcastRoom,
+    findPlayerBySocket,
+    isHostSocket,
+    clearTurnTimer,
+    startTurnTimer,
+    cancelAllGraceTimers
+} = require('../utils/roomUtils');
+const {
+    getCurrentClueGiver,
+    flagMissingClueGiver,
+    skipMissingClueGiver
+} = require('../utils/playerUtils');
 
 function registerGameHandlers(io, socket, rooms) {
 
-    // Host resumes the game from paused state
-    socket.on("resume-game", (roomCode, callback) => {
+    // Host stops waiting on a clue giver who dropped out
+    socket.on("skip-waiting", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
-        if (room.gamePhase !== "paused") return callback({ success: false, error: "Game is not paused" });
-        if (room.hostId !== socket.id) return callback({ success: false, error: "Only the host can resume" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can do that" });
+            }
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        room.gamePhase = room.pausedGamePhase;
-        delete room.pausedGamePhase;
-        console.log(`Game resumed by host in room ${roomCode} (phase: ${room.gamePhase})`);
-
-        if (room.gamePhase === "turn-active") {
-            startTurnTimer(io, roomCode, rooms);
-        }
-
-        broadcastState(io, roomCode, rooms);
-
-        callback({ success: true, gameState: room });
+            skipMissingClueGiver(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
-            console.error(`Error in resume-game:`, err);
+            console.error(`Error in skip-waiting:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Host clicks "Start Round" from round-start screen
+    // Host clicks "Start Round" from the round-start screen
     socket.on("start-round", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can start the round" });
+            }
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        room.gamePhase = "turn-ready";
-        pauseIfClueGiverDisconnected(room, roomCode);
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            room.gamePhase = "turn-ready";
+            room.activeGame.currentClueGiver = getCurrentClueGiver(room);
+            flagMissingClueGiver(room, roomCode);
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in start-round:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Clue giver clicks "Start" on turn-ready screen
+    // Clue giver clicks "Start" on the turn-ready screen
     socket.on("start-turn", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        const game = room.activeGame;
+            const game = room.activeGame;
+            const self = findPlayerBySocket(room, socket.id);
+            if (!self) return callback({ success: false, error: "You're not in this room" });
+            if (self.name !== game.currentClueGiver && !self.is_host) {
+                return callback({ success: false, error: "Only the clue giver can start the turn" });
+            }
+            if (room.gamePhase !== "turn-ready") {
+                return callback({ success: false, error: "Turn already started" });
+            }
 
-        if (game.wordsRemaining.length === 0) {
-            room.gamePhase = "round-end";
-            broadcastState(io, roomCode, rooms);
-            return callback({ success: true, gameState: room });
-        }
+            if (game.wordsRemaining.length === 0) {
+                room.gamePhase = "round-end";
+                broadcastRoom(io, roomCode, rooms);
+                return callback({ success: true, gameState: stateFor(room, socket.id) });
+            }
 
-        game.currentWord = game.wordsRemaining.pop();
-        game.wordsGuessedThisTurn = [];
-        game.skipsThisTurn = 0;
-        game.turnTimeLeft = game.carriedTimeLeft || game.turnDuration;
-        game.carriedTimeLeft = null;
-        room.gamePhase = "turn-active";
+            room.waitingFor = null;
+            game.currentWord = game.wordsRemaining.pop();
+            game.turnClueGiver = game.currentClueGiver;
+            game.wordsGuessedThisTurn = [];
+            game.skipsThisTurn = 0;
+            game.turnTimeLeft = game.carriedTimeLeft || game.turnDuration;
+            game.carriedTimeLeft = null;
+            room.gamePhase = "turn-active";
 
-        startTurnTimer(io, roomCode, rooms);
-        broadcastState(io, roomCode, rooms);
-
-        callback({ success: true, gameState: room });
+            startTurnTimer(io, roomCode, rooms);
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in start-turn:`, err);
             if (callback) callback({ success: false, error: "Server error" });
@@ -110,66 +99,63 @@ function registerGameHandlers(io, socket, rooms) {
     // Clue giver presses "Got It!"
     socket.on("word-guessed", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        const game = room.activeGame;
-        if (!game.currentWord) return callback({ success: false, error: "No active word" });
+            const game = room.activeGame;
+            if (room.gamePhase !== "turn-active") {
+                return callback({ success: false, error: "Turn is not active" });
+            }
+            if (!game.currentWord) return callback({ success: false, error: "No active word" });
 
-        // Score the point
-        const teamName = game.teamOrder[game.currentTeamIndex];
-        const roundIdx = game.currentRound - 1;
-        game.scores[teamName][roundIdx] += 1;
-        game.wordsCorrect[teamName][roundIdx] += 1;
-        room.teamLookup[teamName].score += 1;
-
-        game.wordsGuessedThisTurn.push(game.currentWord);
-
-        // Rotate clue giver to the next teammate
-        const teamName2 = game.teamOrder[game.currentTeamIndex];
-        game.clueGiverRotation[teamName2] += 1;
-        game.currentClueGiver = getCurrentClueGiver(room);
-
-        // Draw next word or end round
-        if (game.wordsRemaining.length === 0) {
-            clearTurnTimer(roomCode);
-            game.turnHistory.push({
-                round: game.currentRound,
-                team: game.teamOrder[game.currentTeamIndex],
-                clueGiver: game.currentClueGiver,
-                wordsGuessed: game.wordsGuessedThisTurn.length,
-                skips: game.skipsThisTurn
-            });
-            game.currentWord = null;
-
-            // For rounds 1-2, carry remaining time so this team continues into the next round
-            const timeLeft = Math.max(0, Math.ceil((game.turnEndsAt - Date.now()) / 1000));
-            if (game.currentRound < 3 && timeLeft > 0) {
-                game.carriedTimeLeft = timeLeft;
-            } else {
-                game.carriedTimeLeft = null;
+            const self = findPlayerBySocket(room, socket.id);
+            if (!self || (self.name !== game.currentClueGiver && !self.is_host)) {
+                return callback({ success: false, error: "Only the clue giver can score a word" });
             }
 
-            room.gamePhase = "round-end";
-            broadcastState(io, roomCode, rooms);
-            return callback({ success: true, gameState: room });
-        }
+            const teamName = game.teamOrder[game.currentTeamIndex];
+            const roundIdx = game.currentRound - 1;
+            game.scores[teamName][roundIdx] += 1;
+            game.wordsCorrect[teamName][roundIdx] += 1;
+            room.teamLookup[teamName].score += 1;
 
-        game.currentWord = game.wordsRemaining.pop();
+            game.wordsGuessedThisTurn.push(game.currentWord);
 
-        // Check if the new clue giver (after rotation) is disconnected
-        const newClueGiverPlayer = room.players.find(p => p.name === game.currentClueGiver);
-        if (newClueGiverPlayer && !newClueGiverPlayer.connected) {
-            clearTurnTimer(roomCode);
-            game.turnTimeLeft = Math.max(0, Math.ceil((game.turnEndsAt - Date.now()) / 1000));
-            delete game.turnEndsAt;
-            room.pausedGamePhase = room.gamePhase;
-            room.gamePhase = "paused";
-            console.log(`Game paused in room ${roomCode} — new clue giver ${game.currentClueGiver} is disconnected`);
-        }
+            // Pass the phone to the next teammate for the next word
+            game.clueGiverRotation[teamName] += 1;
+            game.currentClueGiver = getCurrentClueGiver(room);
 
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            // Bowl empty — the round is over
+            if (game.wordsRemaining.length === 0) {
+                clearTurnTimer(roomCode);
+                const timeLeft = game.turnEndsAt
+                    ? Math.max(0, Math.ceil((game.turnEndsAt - Date.now()) / 1000))
+                    : 0;
+                game.turnHistory.push({
+                    round: game.currentRound,
+                    team: teamName,
+                    clueGiver: game.turnClueGiver || game.currentClueGiver,
+                    wordsGuessed: game.wordsGuessedThisTurn.length,
+                    skips: game.skipsThisTurn
+                });
+                game.currentWord = null;
+                delete game.turnEndsAt;
+
+                // Rounds 1-2: this team keeps their leftover time next round
+                game.carriedTimeLeft = (game.currentRound < 3 && timeLeft > 0) ? timeLeft : null;
+
+                room.waitingFor = null;
+                room.gamePhase = "round-end";
+                broadcastRoom(io, roomCode, rooms);
+                return callback({ success: true, gameState: stateFor(room, socket.id) });
+            }
+
+            game.currentWord = game.wordsRemaining.pop();
+            flagMissingClueGiver(room, roomCode);
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in word-guessed:`, err);
             if (callback) callback({ success: false, error: "Server error" });
@@ -179,149 +165,192 @@ function registerGameHandlers(io, socket, rooms) {
     // Clue giver presses "Skip"
     socket.on("skip-word", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        const game = room.activeGame;
-        if (!game.currentWord) return callback({ success: false, error: "No active word" });
+            const game = room.activeGame;
+            if (room.gamePhase !== "turn-active") {
+                return callback({ success: false, error: "Turn is not active" });
+            }
+            if (!game.currentWord) return callback({ success: false, error: "No active word" });
+            if (game.wordsRemaining.length === 0) {
+                return callback({ success: false, error: "Only one word remaining" });
+            }
 
-        // Can't skip if this is the only word left
-        if (game.wordsRemaining.length === 0) {
-            return callback({ success: false, error: "Only one word remaining" });
-        }
+            const self = findPlayerBySocket(room, socket.id);
+            if (!self || (self.name !== game.currentClueGiver && !self.is_host)) {
+                return callback({ success: false, error: "Only the clue giver can skip" });
+            }
 
-        // -1 point penalty for skipping
-        const teamName = game.teamOrder[game.currentTeamIndex];
-        const roundIdx = game.currentRound - 1;
-        game.scores[teamName][roundIdx] -= 1;
-        game.skipPenalties[teamName][roundIdx] += 1;
-        game.skipsThisTurn += 1;
-        room.teamLookup[teamName].score -= 1;
+            const teamName = game.teamOrder[game.currentTeamIndex];
+            const roundIdx = game.currentRound - 1;
+            game.scores[teamName][roundIdx] -= 1;
+            game.skipPenalties[teamName][roundIdx] += 1;
+            game.skipsThisTurn += 1;
+            room.teamLookup[teamName].score -= 1;
 
-        // Draw a different word first, then put the skipped word back
-        const skippedWord = game.currentWord;
-        game.currentWord = game.wordsRemaining.pop();
-        const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
-        game.wordsRemaining.splice(insertIdx, 0, skippedWord);
+            // Draw a different word first, then bury the skipped one
+            const skippedWord = game.currentWord;
+            game.currentWord = game.wordsRemaining.pop();
+            const insertIdx = Math.floor(Math.random() * (game.wordsRemaining.length + 1));
+            game.wordsRemaining.splice(insertIdx, 0, skippedWord);
 
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in skip-word:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Host adjusts a team's total score (tracked separately from round scores)
+    // Host nudges a team's total score
     socket.on("adjust-score", (roomCode, teamName, delta, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can adjust scores" });
+            }
+            if (!room.activeGame?.hostAdjustments?.hasOwnProperty(teamName)) {
+                return callback({ success: false, error: "Unknown team" });
+            }
 
-        const game = room.activeGame;
-        game.hostAdjustments[teamName] += delta;
-        room.teamLookup[teamName].score += delta;
+            const amount = delta > 0 ? 1 : -1;
+            room.activeGame.hostAdjustments[teamName] += amount;
+            room.teamLookup[teamName].score += amount;
 
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in adjust-score:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Advance to next turn after turn-end
+    // Host advances past the turn summary
     socket.on("next-turn", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can continue" });
+            }
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        const game = room.activeGame;
+            const game = room.activeGame;
 
-        // Rotate clue giver for the team that just played
-        const currentTeam = game.teamOrder[game.currentTeamIndex];
-        game.clueGiverRotation[currentTeam] += 1;
+            // Rotate the clue giver for the team that just played, then hand off
+            game.clueGiverRotation[game.teamOrder[game.currentTeamIndex]] += 1;
+            game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
+            game.currentClueGiver = getCurrentClueGiver(room);
+            game.currentWord = null;
+            game.wordsGuessedThisTurn = [];
+            game.skipsThisTurn = 0;
+            game.turnTimeLeft = game.turnDuration;
 
-        // Advance to next team
-        game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
-
-        // Set up next clue giver
-        game.currentClueGiver = getCurrentClueGiver(room);
-        game.currentWord = null;
-        game.wordsGuessedThisTurn = [];
-
-        room.gamePhase = "turn-ready";
-        pauseIfAnyDisconnected(room, roomCode);
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            room.gamePhase = "turn-ready";
+            flagMissingClueGiver(room, roomCode);
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in next-turn:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Start next round after round-end
+    // Host starts the next round
     socket.on("next-round", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can continue" });
+            }
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
 
-        const game = room.activeGame;
+            const game = room.activeGame;
 
-        if (game.currentRound >= 3) {
-            room.gamePhase = "game-over";
-            broadcastState(io, roomCode, rooms);
-            return callback({ success: true, gameState: room });
-        }
+            if (game.currentRound >= 3) {
+                clearTurnTimer(roomCode);
+                room.waitingFor = null;
+                room.gamePhase = "game-over";
+                broadcastRoom(io, roomCode, rooms);
+                return callback({ success: true, gameState: stateFor(room, socket.id) });
+            }
 
-        const carriedTime = game.carriedTimeLeft;
+            const carriedTime = game.carriedTimeLeft;
 
-        // Advance clue giver for the team that was playing when round ended
-        const lastTeam = game.teamOrder[game.currentTeamIndex];
-        game.clueGiverRotation[lastTeam] += 1;
+            // Advance the clue giver for whoever was playing when the round ended
+            game.clueGiverRotation[game.teamOrder[game.currentTeamIndex]] += 1;
 
-        game.currentRound += 1;
-        game.wordsRemaining = shuffleArray(getWordArray(room));
+            game.currentRound += 1;
+            game.wordsRemaining = shuffleArray(game.allWords);
 
-        if (carriedTime) {
-            // Same team continues with their leftover time
+            // Cleared the bowl with time left? Same team continues. Otherwise rotate.
+            if (!carriedTime) {
+                game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
+            }
             game.currentClueGiver = getCurrentClueGiver(room);
-        } else {
-            // Normal rotation: next team starts the new round
-            game.currentTeamIndex = (game.currentTeamIndex + 1) % game.teamOrder.length;
-            game.currentClueGiver = getCurrentClueGiver(room);
-        }
+            game.currentWord = null;
+            game.wordsGuessedThisTurn = [];
+            game.skipsThisTurn = 0;
 
-        game.currentWord = null;
-        game.wordsGuessedThisTurn = [];
-
-        room.gamePhase = "round-start";
-        pauseIfAnyDisconnected(room, roomCode);
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            room.gamePhase = "round-start";
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in next-round:`, err);
             if (callback) callback({ success: false, error: "Server error" });
         }
     });
 
-    // Play again — reset to lobby
+    // Host ends the game early
+    socket.on("end-game", (roomCode, callback) => {
+        try {
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can end the game" });
+            }
+            if (!room.activeGame) return callback({ success: false, error: "No game in progress" });
+
+            clearTurnTimer(roomCode);
+            room.waitingFor = null;
+            room.gamePhase = "game-over";
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
+        } catch (err) {
+            console.error(`Error in end-game:`, err);
+            if (callback) callback({ success: false, error: "Server error" });
+        }
+    });
+
+    // Play again — back to the lobby with whoever is still here
     socket.on("play-again", (roomCode, callback) => {
         try {
-        const room = rooms[roomCode];
-        if (!room) return callback({ success: false, error: "Room not found" });
+            const room = rooms[roomCode];
+            if (!room) return callback({ success: false, error: "Room not found" });
+            if (!isHostSocket(room, socket.id)) {
+                return callback({ success: false, error: "Only the host can restart" });
+            }
 
-        clearTurnTimer(roomCode);
+            clearTurnTimer(roomCode);
+            cancelAllGraceTimers(roomCode);
 
-        delete room.activeGame;
-        delete room.gameConfig;
-        delete room.playerLookup;
-        delete room.teamLookup;
-        delete room.wordList;
-        room.gamePhase = "in-lobby";
+            // Players who never came back don't carry into the next game
+            room.players = room.players.filter(p => !p.absent);
 
-        broadcastState(io, roomCode, rooms);
-        callback({ success: true, gameState: room });
+            delete room.activeGame;
+            delete room.gameConfig;
+            delete room.playerLookup;
+            delete room.teamLookup;
+            delete room.wordList;
+            room.gamePhase = "in-lobby";
+            room.waitingFor = null;
+
+            broadcastRoom(io, roomCode, rooms);
+            callback({ success: true, gameState: stateFor(room, socket.id) });
         } catch (err) {
             console.error(`Error in play-again:`, err);
             if (callback) callback({ success: false, error: "Server error" });

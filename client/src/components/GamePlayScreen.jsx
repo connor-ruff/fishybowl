@@ -1,4 +1,5 @@
-import { useState, useEffect, memo } from 'react';
+import { memo, useSyncExternalStore } from 'react';
+import { subscribeClock, getClockSnapshot } from '../utils/clock';
 
 // ─── Scoreboard (memoized to avoid re-renders on timer ticks) ───
 const Scoreboard = memo(function Scoreboard({ teamOrder, scores, hostAdjustments, totalScores, currentTeamName, currentRound, rounds, turnHistory, showRoundBreakdown }) {
@@ -73,13 +74,33 @@ const ScoreAdjust = memo(function ScoreAdjust({ teamOrder, totalScores, handleAd
     );
 });
 
+// ─── Player info header ───
+const PlayerHeader = memo(function PlayerHeader({ roomCode, playerName, playerTeam }) {
+    return (
+        <div className="player-header">
+            <span>Room: <strong>{roomCode}</strong></span>
+            <span>{playerName}</span>
+            {playerTeam && <span>{playerTeam}</span>}
+        </div>
+    );
+});
+
+// ─── Round rules banner (shown during turn-ready and turn-active) ───
+const RoundRuleBanner = memo(function RoundRuleBanner({ roundNumber, round }) {
+    return (
+        <div className="round-rule-banner">
+            <strong>Round {roundNumber}: {round.name}</strong> — {round.description}
+        </div>
+    );
+});
+
 function GamePlayScreen({
-    gameState, setGameState, error, setError,
-    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed,
+    gameState, error,
+    handleSkipWaiting, handleStartRound, handleStartTurn, handleWordGuessed,
     handleSkipWord, handleNextTurn, handleNextRound, handlePlayAgain,
-    handleAdjustScore
+    handleAdjustScore, handleEndGame, handleRemovePlayer
 }) {
-    const serverState = gameState.serverState;
+    const serverState = gameState.serverState || {};
     const gamePhase = serverState.gamePhase;
     const activeGame = serverState.activeGame;
     const playerName = gameState.clientState.playerName;
@@ -87,75 +108,91 @@ function GamePlayScreen({
 
     const playerTeam = serverState.playerLookup?.[playerName]?.team;
 
-    // Hooks must be called unconditionally (React rules of hooks)
-    const [timeLeft, setTimeLeft] = useState(activeGame?.turnTimeLeft ?? 0);
+    // The server sends an absolute turnEndsAt, so the countdown is computed
+    // locally — a dropped socket doesn't freeze the clock, and a reconnect
+    // lands on the correct time with no drift to correct.
+    const now = useSyncExternalStore(subscribeClock, getClockSnapshot);
+    const turnEndsAt = gamePhase === "turn-active" ? activeGame?.turnEndsAt : null;
+    const timeLeft = turnEndsAt
+        ? Math.max(0, Math.ceil((turnEndsAt - now) / 1000))
+        : (activeGame?.turnTimeLeft ?? 0);
 
-    useEffect(() => {
-        if (!activeGame) return;
-        if (gamePhase !== "turn-active" || !activeGame.turnEndsAt) {
-            setTimeLeft(activeGame.turnTimeLeft);
-            return;
-        }
-        const calcTimeLeft = () => Math.max(0, Math.ceil((activeGame.turnEndsAt - Date.now()) / 1000));
-        setTimeLeft(calcTimeLeft());
-        const interval = setInterval(() => {
-            setTimeLeft(calcTimeLeft());
-        }, 200);
-        return () => clearInterval(interval);
-    }, [gamePhase, activeGame?.turnEndsAt]);
-
-    // ─── Player info header ───
-    const PlayerHeader = () => (
-        <div className="player-header">
-            <span>Room: <strong>{gameState.clientState.roomCode}</strong></span>
-            <span>{playerName}</span>
-            {playerTeam && <span>{playerTeam}</span>}
-        </div>
+    const header = (
+        <PlayerHeader
+            roomCode={gameState.clientState.roomCode}
+            playerName={playerName}
+            playerTeam={playerTeam}
+        />
     );
 
-    // ─── PAUSED (checked early since activeGame may not exist during config phases) ───
-    if (gamePhase === "paused") {
-        const disconnectedPlayers = serverState.players.filter(p => p.connected === false);
+    // Shouldn't happen, but never render a blank screen if it does
+    if (!activeGame) {
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
-                    <h1 className="title title-sm">Game Paused</h1>
-
-                    {disconnectedPlayers.length > 0 ? (
-                        <>
-                            <p className="muted">The following player{disconnectedPlayers.length > 1 ? 's are' : ' is'} disconnected:</p>
-                            <ul className="player-list">
-                                {disconnectedPlayers.map(p => (
-                                    <li key={p.name} style={{ opacity: 0.6 }}>
-                                        <span>{p.name}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                            <p className="muted">
-                                They can rejoin with room code <strong>{gameState.clientState.roomCode}</strong>
-                            </p>
-                            <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                                They must use the <strong>same name</strong> they originally joined with.
-                            </p>
-                        </>
-                    ) : (
-                        <p className="muted">All players are connected.</p>
-                    )}
-
-                    {isHost ? (
-                        <button className="btn-primary" onClick={handleResumeGame} style={{ marginTop: '1rem' }}>
-                            Resume Game
-                        </button>
-                    ) : (
-                        <p className="muted">Waiting for host to resume...</p>
-                    )}
+                    {header}
+                    <h1 className="title title-sm">Loading game&hellip;</h1>
+                    <p className="muted">Syncing with the server.</p>
                 </div>
             </div>
         );
     }
 
-    // ─── activeGame-dependent setup (safe after paused early-return) ───
+    // ─── WAITING ON A CLUE GIVER ───
+    // The only thing that can hold up play: the person who has to give clues
+    // has been gone for a while. Everything is frozen rather than lost, and the
+    // host can move past them in one tap.
+    if (serverState.waitingFor) {
+        const waitingOn = serverState.waitingFor;
+        const theirTeam = serverState.playerLookup?.[waitingOn]?.team;
+        return (
+            <div className="page">
+                <div className="card card-center">
+                    {header}
+                    <h1 className="title title-sm">Hang on&hellip;</h1>
+                    <p className="muted">
+                        <strong>{waitingOn}</strong>
+                        {theirTeam ? ` (${theirTeam})` : ''} is up next but has dropped off.
+                        The timer is paused.
+                    </p>
+                    <p className="muted" style={{ fontSize: '0.85em' }}>
+                        They&apos;ll pick up right where they left off when they reopen the game
+                        in room <strong>{gameState.clientState.roomCode}</strong>.
+                    </p>
+
+                    {isHost ? (
+                        <>
+                            <button
+                                className="btn-primary"
+                                onClick={handleSkipWaiting}
+                                style={{ marginTop: '1rem' }}
+                            >
+                                {gamePhase === "turn-active"
+                                    ? `End ${waitingOn}'s turn`
+                                    : `Skip ${waitingOn} for now`}
+                            </button>
+                            <button
+                                className="btn-mini btn-mini-danger"
+                                onClick={() => {
+                                    if (window.confirm(`Remove ${waitingOn} from the game entirely?`)) {
+                                        handleRemovePlayer(waitingOn);
+                                    }
+                                }}
+                            >
+                                Remove {waitingOn} from the game
+                            </button>
+                        </>
+                    ) : (
+                        <p className="muted">The host can skip them if they don&apos;t come back.</p>
+                    )}
+
+                    {error && <p className="error-text">{error}</p>}
+                </div>
+            </div>
+        );
+    }
+
+    // ─── activeGame-dependent setup ───
     const currentRound = activeGame.rounds[activeGame.currentRound - 1];
     const currentTeamName = activeGame.teamOrder[activeGame.currentTeamIndex];
     const isClueGiver = activeGame.currentClueGiver === playerName;
@@ -183,11 +220,8 @@ function GamePlayScreen({
         turnHistory
     };
 
-    // ─── Round rules banner (shown during turn-ready and turn-active) ───
-    const RoundRuleBanner = () => (
-        <div className="round-rule-banner">
-            <strong>Round {activeGame.currentRound}: {currentRound.name}</strong> — {currentRound.description}
-        </div>
+    const ruleBanner = (
+        <RoundRuleBanner roundNumber={activeGame.currentRound} round={currentRound} />
     );
 
     // ─── ROUND START ───
@@ -195,7 +229,7 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
+                    {header}
                     <h1 className="title title-sm">Round {activeGame.currentRound} of 3</h1>
                     <h2 style={{ margin: '0' }}>{currentRound.name}</h2>
                     <p className="muted" style={{ maxWidth: 360, margin: '0 auto' }}>
@@ -210,6 +244,7 @@ function GamePlayScreen({
                     ) : (
                         <p className="muted">Waiting for host to start the round...</p>
                     )}
+                    {error && <p className="error-text">{error}</p>}
                 </div>
             </div>
         );
@@ -220,11 +255,11 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
-                    <RoundRuleBanner />
+                    {header}
+                    {ruleBanner}
                     <h1 className="title title-sm">{currentTeamName}'s Turn</h1>
                     <h2 style={{ margin: 0 }}>{activeGame.currentClueGiver} is giving clues</h2>
-                    <p className="muted">{activeGame.wordsRemaining.length} words remaining</p>
+                    <p className="muted">{activeGame.wordsRemainingCount} words remaining</p>
                     <Scoreboard {...scoreboardProps} showRoundBreakdown={false} />
                     {isClueGiver ? (
                         <button className="btn-success" onClick={handleStartTurn}>
@@ -235,6 +270,7 @@ function GamePlayScreen({
                             Waiting for {activeGame.currentClueGiver} to start...
                         </p>
                     )}
+                    {error && <p className="error-text">{error}</p>}
                 </div>
             </div>
         );
@@ -248,23 +284,24 @@ function GamePlayScreen({
             return (
                 <div className="page">
                     <div className="card card-center">
-                        <PlayerHeader />
+                        {header}
                         <div className={`timer ${timerClass}`}>{timeLeft}</div>
-                        <RoundRuleBanner />
+                        {ruleBanner}
                         <div className="word-card">{activeGame.currentWord}</div>
                         <div className="btn-row">
                             <button className="btn-success" onClick={handleWordGuessed}>Got It!</button>
                             <button
                                 className="btn-danger"
                                 onClick={handleSkipWord}
-                                disabled={activeGame.wordsRemaining.length === 0}
+                                disabled={activeGame.wordsRemainingCount === 0}
                             >
                                 Skip
                             </button>
                         </div>
                         <p className="muted" style={{ fontSize: '0.85em' }}>
-                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemainingCount}
                         </p>
+                        {error && <p className="error-text">{error}</p>}
                     </div>
                 </div>
             );
@@ -275,13 +312,13 @@ function GamePlayScreen({
             return (
                 <div className="page">
                     <div className="card card-center">
-                        <PlayerHeader />
+                        {header}
                         <div className={`timer ${timerClass}`}>{timeLeft}</div>
-                        <RoundRuleBanner />
+                        {ruleBanner}
                         <h2 style={{ margin: 0 }}>{activeGame.currentClueGiver} is giving clues!</h2>
                         <p style={{ fontSize: '1.2em', margin: '8px 0' }}>Guess the word!</p>
                         <p className="muted" style={{ fontSize: '0.85em' }}>
-                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                            Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemainingCount}
                         </p>
                         <Scoreboard {...scoreboardProps} showRoundBreakdown={false} />
                     </div>
@@ -293,13 +330,13 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
+                    {header}
                     <div className={`timer ${timerClass}`}>{timeLeft}</div>
-                    <RoundRuleBanner />
+                    {ruleBanner}
                     <h2 style={{ margin: 0 }}>{currentTeamName} is playing...</h2>
                     <p className="muted">{activeGame.currentClueGiver} is giving clues</p>
                     <p className="muted" style={{ fontSize: '0.85em' }}>
-                        Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemaining.length}
+                        Guessed: {activeGame.wordsGuessedThisTurn.length} | Remaining: {activeGame.wordsRemainingCount}
                     </p>
                     <Scoreboard {...scoreboardProps} showRoundBreakdown={false} />
                 </div>
@@ -312,10 +349,12 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
+                    {header}
                     <h1 className="title title-sm">Time's Up!</h1>
                     <h2 style={{ margin: 0 }}>
-                        {activeGame.currentClueGiver} got {activeGame.wordsGuessedThisTurn.length} word{activeGame.wordsGuessedThisTurn.length !== 1 ? 's' : ''}
+                        {/* currentClueGiver has already rotated on, so credit the turn's starter */}
+                        {turnHistory[turnHistory.length - 1]?.clueGiver || activeGame.currentClueGiver}
+                        {' '}got {activeGame.wordsGuessedThisTurn.length} word{activeGame.wordsGuessedThisTurn.length !== 1 ? 's' : ''}
                     </h2>
                     {activeGame.wordsGuessedThisTurn.length > 0 && (
                         <ul className="word-list">
@@ -324,14 +363,25 @@ function GamePlayScreen({
                             ))}
                         </ul>
                     )}
-                    <p className="muted">{activeGame.wordsRemaining.length} words remaining this round</p>
+                    <p className="muted">{activeGame.wordsRemainingCount} words remaining this round</p>
                     <Scoreboard {...scoreboardProps} showRoundBreakdown={false} />
                     {isHost && <ScoreAdjust teamOrder={activeGame.teamOrder} totalScores={totalScores} handleAdjustScore={handleAdjustScore} />}
                     {isHost ? (
-                        <button className="btn-primary" onClick={handleNextTurn}>Next Turn</button>
+                        <>
+                            <button className="btn-primary" onClick={handleNextTurn}>Next Turn</button>
+                            <button
+                                className="btn-link"
+                                onClick={() => {
+                                    if (window.confirm("End the game here and show final scores?")) handleEndGame();
+                                }}
+                            >
+                                End game early
+                            </button>
+                        </>
                     ) : (
                         <p className="muted">Waiting for host to continue...</p>
                     )}
+                    {error && <p className="error-text">{error}</p>}
                 </div>
             </div>
         );
@@ -343,7 +393,7 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-center">
-                    <PlayerHeader />
+                    {header}
                     <h1 className="title title-sm">Round {activeGame.currentRound} Complete!</h1>
                     <h2 style={{ margin: 0 }}>{currentRound.name}</h2>
                     {activeGame.carriedTimeLeft && (
@@ -390,7 +440,7 @@ function GamePlayScreen({
         return (
             <div className="page">
                 <div className="card card-wide card-center">
-                    <PlayerHeader />
+                    {header}
                     <h1 className="title">Game Over!</h1>
                     {isTie ? (
                         <h2 style={{ margin: 0 }}>It's a tie!</h2>

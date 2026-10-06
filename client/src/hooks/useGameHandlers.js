@@ -1,226 +1,108 @@
-import { useCallback } from "react";
-import { SESSION_ID } from "../utils/session";
+import { useCallback, useMemo } from "react";
+import { SESSION_ID, saveSession, clearDraft } from "../utils/session";
 
-export function useGameHandlers(socket, gameState, setGameState, setError) {
-  const handleCreateRoom = useCallback(() => {
-    if (!gameState.clientState.playerName) return alert("Enter your name first");
+const ACK_TIMEOUT_MS = 8000;
 
-    socket.emit("create-room", { playerName: gameState.clientState.playerName, sessionId: SESSION_ID }, (res) => {
-      if (res.success) {
-        setGameState(prev => ({
-          ...prev,
-          serverState: res.gameState,
-          clientState: {
-            ...prev.clientState,
-            roomCode: res.roomCode,
-            playerIsHost: true,
-            clientGamePhase: "lobby"
-          }
-        }));
+export function useGameHandlers(socket, gameState, setGameState, setError, { applyServerState, resetToStart }) {
+  const { roomCode, playerName, playerIsHost } = gameState.clientState;
+
+  // Every action goes through here. The ack is time-limited so a button never
+  // silently does nothing when the connection is struggling — the player gets
+  // told to wait rather than tapping into the void.
+  const emit = useCallback((event, args = [], { onSuccess } = {}) => {
+    socket.timeout(ACK_TIMEOUT_MS).emit(event, ...args, (err, res) => {
+      if (err) {
+        setError("No response from the server — check your connection and try again.");
+        return;
+      }
+      if (res?.success) {
         setError("");
+        if (res.gameState) applyServerState(res.gameState);
+        if (onSuccess) onSuccess(res);
+      } else {
+        setError(res?.error || "Something went wrong.");
       }
     });
-  }, [socket, gameState.clientState.playerName, setGameState, setError]);
+  }, [socket, setError, applyServerState]);
+
+  const handleCreateRoom = useCallback(() => {
+    const name = (playerName || "").trim();
+    if (!name) return setError("Enter your name first");
+
+    emit("create-room", [{ playerName: name, sessionId: SESSION_ID }], {
+      onSuccess: (res) => saveSession(res.roomCode, name)
+    });
+  }, [emit, playerName, setError]);
 
   const handleJoinRoom = useCallback((roomCodeInput) => {
-    if (!gameState.clientState.playerName || !roomCodeInput) {
-      return alert("Enter name and room code");
-    }
+    const name = (playerName || "").trim();
+    const code = (roomCodeInput || "").trim().toUpperCase();
+    if (!name) return setError("Enter your name first");
+    if (!code) return setError("Enter a room code");
 
-    socket.emit("join-room", {
-      roomCode: roomCodeInput,
-      playerName: gameState.clientState.playerName,
-      sessionId: SESSION_ID
-    }, (res) => {
-      if (res.success) {
-        if (res.isRejoin) {
-          setGameState(prev => ({
-            ...prev,
-            serverState: res.gameState,
-            clientState: {
-              ...prev.clientState,
-              roomCode: res.roomCode,
-              playerIsHost: res.isHost,
-              clientGamePhase: res.gameState.gamePhase
-            }
-          }));
-        } else {
-          setGameState(prev => ({
-            ...prev,
-            serverState: res.gameState,
-            clientState: {
-              ...prev.clientState,
-              roomCode: res.roomCode,
-              playerIsHost: false,
-              clientGamePhase: "lobby"
-            }
-          }));
-        }
-        setError("");
-      } else {
-        setError(res.error);
-      }
+    emit("join-room", [{ roomCode: code, playerName: name, sessionId: SESSION_ID }], {
+      onSuccess: (res) => saveSession(res.roomCode, res.gameState?.you?.name || name)
     });
-  }, [socket, gameState.clientState.playerName, setGameState, setError]);
+  }, [emit, playerName, setError]);
 
   const handleStartGame = useCallback(() => {
+    if (!playerIsHost) return setError("Only the host can start the game");
+    emit("start-game", [roomCode]);
+  }, [emit, roomCode, playerIsHost, setError]);
 
-        if (!gameState.clientState.playerIsHost) return alert("Only the host can start the game");
+  const handleSubmitGameConfig = useCallback((config) => {
+    if (!playerIsHost) return setError("Only the host can configure the game");
+    emit("submit-game-config", [roomCode, config], {
+      onSuccess: () => clearDraft("config", roomCode, "")
+    });
+  }, [emit, roomCode, playerIsHost, setError]);
 
-        if (!window.confirm("Start the game? No new players will be able to join after this.")) return;
+  const handleSubmitWords = useCallback((words) => {
+    emit("submit-words", [roomCode, playerName, words], {
+      onSuccess: () => clearDraft("words", roomCode, playerName)
+    });
+  }, [emit, roomCode, playerName]);
 
-        socket.emit("start-game", gameState.clientState.roomCode, (res) => {
-            if (res.success) {
-                setGameState(prev => ({
-                    ...prev,
-                    serverState: res.gameState,
-                    clientState: {
-                        ...prev.clientState,
-                        clientGamePhase: "pre-game-configs"
-                    }
-                }));
-                setError("");
-            }
-            else {
-                setError(res.error);
-            }
-        });
+  const handleRemovePlayer = useCallback((name) => {
+    emit("remove-player", [roomCode, name]);
+  }, [emit, roomCode]);
 
-    }, [socket, gameState.clientState.roomCode, setGameState, setError]);
+  const handleTransferHost = useCallback((name) => {
+    emit("transfer-host", [roomCode, name]);
+  }, [emit, roomCode]);
 
-    const handleSubmitGameConfig = useCallback((config) => {
+  const handleLeaveRoom = useCallback(() => {
+    socket.emit("leave-room", roomCode, () => {});
+    resetToStart();
+  }, [socket, roomCode, resetToStart]);
 
-        if (!gameState.clientState.playerIsHost) {
-          return alert("Only the host can submit game configuration");
-        }
+  const simple = useMemo(() => ({
+    handleForceStartGame: () => emit("force-start-game", [roomCode]),
+    handleSkipWaiting: () => emit("skip-waiting", [roomCode]),
+    handleStartRound: () => emit("start-round", [roomCode]),
+    handleStartTurn: () => emit("start-turn", [roomCode]),
+    handleWordGuessed: () => emit("word-guessed", [roomCode]),
+    handleSkipWord: () => emit("skip-word", [roomCode]),
+    handleNextTurn: () => emit("next-turn", [roomCode]),
+    handleNextRound: () => emit("next-round", [roomCode]),
+    handleEndGame: () => emit("end-game", [roomCode]),
+    handlePlayAgain: () => emit("play-again", [roomCode])
+  }), [emit, roomCode]);
 
-
-        socket.emit("submit-game-config", gameState.clientState.roomCode, config, (res) => {
-            if (res.success) {
-                setGameState(prev => ({
-                    ...prev,
-                    serverState: res.gameState,
-                    clientState: {
-                        ...prev.clientState,
-                        clientGamePhase: "collecting-words"
-                    }
-                }));
-                setError("");
-            } else {
-                setError(res.error);
-                alert("Failed to submit configuration: " + res.error);
-            }
-        });
-
-    }, [socket, gameState, setGameState, setError]);
-
-    const handleSubmitWords = useCallback((words) => {
-
-      socket.emit("submit-words", gameState.clientState.roomCode, gameState.clientState.playerName, words, (res) => {
-          if (res.success) {
-              setGameState(prev => ({
-                  ...prev,
-                  serverState: res.gameState,
-                  clientState: {
-                      ...prev.clientState,
-                      clientGamePhase: "collecting-words-waiting-for-others"
-                  }
-              }));
-              setError("");
-          } else {
-              setError(res.error);
-              alert("Failed to submit words: " + res.error);
-          }
-        });
-    }, [socket, gameState, setGameState, setError]);
-
-    // Helper for gameplay actions that all follow the same pattern
-    const emitGameAction = useCallback((event) => {
-        socket.emit(event, gameState.clientState.roomCode, (res) => {
-            if (res.success) {
-                setGameState(prev => {
-                    let newPhase = res.gameState.gamePhase;
-                    // If resuming back to collecting-words, check if this player already submitted
-                    if (newPhase === "collecting-words") {
-                        const myName = prev.clientState.playerName;
-                        const alreadySubmitted = myName && res.gameState.playerLookup?.[myName]?.wordsSubmitted;
-                        if (alreadySubmitted) {
-                            newPhase = "collecting-words-waiting-for-others";
-                        }
-                    }
-                    return {
-                        ...prev,
-                        serverState: res.gameState,
-                        clientState: { ...prev.clientState, clientGamePhase: newPhase }
-                    };
-                });
-            } else {
-                setError(res.error);
-            }
-        });
-    }, [socket, gameState.clientState.roomCode, setGameState, setError]);
-
-    const handleResumeGame = useCallback(() => emitGameAction("resume-game"), [emitGameAction]);
-    const handleStartRound = useCallback(() => emitGameAction("start-round"), [emitGameAction]);
-    const handleStartTurn = useCallback(() => emitGameAction("start-turn"), [emitGameAction]);
-    const handleWordGuessed = useCallback(() => emitGameAction("word-guessed"), [emitGameAction]);
-    const handleSkipWord = useCallback(() => emitGameAction("skip-word"), [emitGameAction]);
-    const handleNextTurn = useCallback(() => emitGameAction("next-turn"), [emitGameAction]);
-    const handleNextRound = useCallback(() => emitGameAction("next-round"), [emitGameAction]);
-    const handlePlayAgain = useCallback(() => emitGameAction("play-again"), [emitGameAction]);
-
-    const handleAdjustScore = useCallback((teamName, delta) => {
-        socket.emit("adjust-score", gameState.clientState.roomCode, teamName, delta, (res) => {
-            if (res.success) {
-                setGameState(prev => ({
-                    ...prev,
-                    serverState: res.gameState,
-                    clientState: { ...prev.clientState, clientGamePhase: res.gameState.gamePhase }
-                }));
-            }
-        });
-    }, [socket, gameState.clientState.roomCode, setGameState]);
-
-    const handleRetryRejoin = useCallback(() => {
-        const { roomCode, playerName } = gameState.clientState;
-        if (!roomCode || !playerName) return;
-
-        socket.emit("join-room", { roomCode, playerName, sessionId: SESSION_ID }, (res) => {
-            if (res.success) {
-                setGameState(prev => ({
-                    ...prev,
-                    serverState: res.gameState,
-                    clientState: {
-                        ...prev.clientState,
-                        roomCode: res.roomCode,
-                        playerIsHost: res.isHost || prev.clientState.playerIsHost,
-                        clientGamePhase: res.gameState.gamePhase
-                    }
-                }));
-                setError("");
-            } else {
-                setError(res.error || "Failed to rejoin");
-            }
-        });
-    }, [socket, gameState.clientState, setGameState, setError]);
-
-    const handleReturnToStart = useCallback(() => {
-        setGameState({
-            serverState: null,
-            clientState: {
-                playerName: null,
-                playerIsHost: null,
-                clientGamePhase: "start-page",
-                roomCode: null
-            }
-        });
-        setError("");
-    }, [setGameState, setError]);
+  const handleAdjustScore = useCallback((teamName, delta) => {
+    emit("adjust-score", [roomCode, teamName, delta]);
+  }, [emit, roomCode]);
 
   return {
-    handleCreateRoom, handleJoinRoom, handleStartGame, handleSubmitGameConfig, handleSubmitWords,
-    handleResumeGame, handleStartRound, handleStartTurn, handleWordGuessed, handleSkipWord,
-    handleNextTurn, handleNextRound, handlePlayAgain, handleAdjustScore,
-    handleRetryRejoin, handleReturnToStart
+    handleCreateRoom,
+    handleJoinRoom,
+    handleStartGame,
+    handleSubmitGameConfig,
+    handleSubmitWords,
+    handleRemovePlayer,
+    handleTransferHost,
+    handleLeaveRoom,
+    handleAdjustScore,
+    ...simple
   };
 }

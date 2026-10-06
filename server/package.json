@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "GRACE_MS=1500 PORT=3099 node index.js & SERVER=$!; sleep 1.5; node test/disconnect.test.js && node test/fullgame.test.js; CODE=$?; kill $SERVER; exit $CODE"
   },
   "keywords": [],
   "author": "",
@@ -15,9 +16,7 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "socket.io-client": "^4.8.4"
   }
 }
-
-
-
